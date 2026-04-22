@@ -1,0 +1,128 @@
+\documentclass[12pt,a4paper]{report}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{times}
+\usepackage{setspace}
+\usepackage{geometry}
+\usepackage{titlesec}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{url}
+\usepackage[table]{xcolor}
+\usepackage{listings}
+\usepackage{microtype}
+\usepackage{xurl}
+
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, shapes.misc, calc, fit, matrix, shadows.blur}
+
+% Allow long strings / URLs to break in tables and paragraphs
+\emergencystretch=2em
+
+% KUET format
+\geometry{
+  top=1.2in,
+  bottom=1.0in,
+  left=1.2in,
+  right=1.0in,
+  headsep=0.2in,
+  footskip=0.4in
+}
+
+\onehalfspacing
+
+\titleformat{\chapter}[display]
+  {\bfseries\centering\fontsize{16}{18}\selectfont}
+  {CHAPTER \thechapter}
+  {0.5em}
+  {}
+
+\titleformat{\section}
+  {\bfseries\fontsize{14}{16}\selectfont}
+  {\thesection}
+  {0.7em}
+  {}
+
+\titleformat{\subsection}
+  {\bfseries\fontsize{12}{14}\selectfont}
+  {\thesubsection}
+  {0.7em}
+  {}
+
+\captionsetup[figure]{font={normalsize},justification=centering}
+\captionsetup[table]{font={normalsize},justification=centering}
+
+\definecolor{kuetblue}{RGB}{0,71,171}
+\definecolor{kuetgray}{RGB}{245,247,250}
+
+\newcommand{\screenshotplaceholder}[1]{%
+  \begin{figure}[H]
+    \centering
+    \fbox{\parbox[c][2.0in][c]{0.85\textwidth}{\centering Screenshot Placeholder\\[4pt] #1}}
+    \caption{#1}
+  \end{figure}
+}
+
+\newcommand{\realshot}[3]{%
+  \begin{figure}[H]
+    \centering
+    \includegraphics[width=#1\textwidth]{#2}
+    \caption{#3}
+  \end{figure}
+}
+
+\begin{document}
+
+\hypersetup{pageanchor=false}
+
+% Cover page without page number
+\pagenumbering{gobble}
+\input{chapters/coverpage}
+\clearpage
+
+% Front matter starts with roman numerals
+\pagenumbering{roman}
+\setcounter{page}{1}
+\input{chapters/titlepage}
+\clearpage
+\input{chapters/acknowledgment}
+\clearpage
+\input{chapters/abstract}
+\clearpage
+
+\tableofcontents
+\clearpage
+\listoftables
+\clearpage
+\listoffigures
+\clearpage
+
+% Main matter
+\hypersetup{pageanchor=true}
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\input{chapters/chapter1}
+\input{chapters/chapter2}
+\input{chapters/chapter3}
+\input{chapters/chapter4}
+\input{chapters/chapter5}
+\input{chapters/chapter6}
+\input{chapters/chapter7}
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

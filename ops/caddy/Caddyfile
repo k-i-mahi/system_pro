@@ -1,0 +1,59 @@
+# Cognitive Copilot — Caddy reverse proxy.
+# DOMAIN is injected by docker-compose.  Defaults to localhost (self-signed cert).
+# When DOMAIN resolves publicly, Caddy auto-provisions a Let's Encrypt certificate.
+
+{
+    email {$ACME_EMAIL:admin@localhost}
+    admin off
+}
+
+{$DOMAIN:localhost} {
+    encode zstd gzip
+    log {
+        output stdout
+        format console
+    }
+
+    # Backend — Express + SSE + Socket.IO.
+    @api {
+        path /api/*
+    }
+    handle @api {
+        reverse_proxy backend:3001 {
+            flush_interval -1   # critical for SSE streaming
+            transport http {
+                read_buffer 4KB
+            }
+        }
+    }
+
+    @ws {
+        path /socket.io/*
+    }
+    handle @ws {
+        reverse_proxy backend:3001
+    }
+
+    # /metrics is a prom-client scrape endpoint guarded by METRICS_KEY.
+    # We still expose it here so Grafana / Prometheus can scrape.
+    @metrics {
+        path /metrics
+    }
+    handle @metrics {
+        reverse_proxy backend:3001
+    }
+
+    # Everything else → SPA.
+    handle {
+        reverse_proxy frontend:80
+    }
+
+    # Hardened HTTP response headers.
+    header {
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    }
+}

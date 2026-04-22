@@ -1,0 +1,34 @@
+\chapter{Conclusion and Future Work}
+\label{ch:limitations}
+
+\section{Conclusion}
+Cognitive Copilot is a local-first, full-stack tutoring system that takes a deliberate position in a crowded field: every answer cites its source, every LLM call is measured, and every mastery claim is probabilistic rather than heuristic. The final deliverable combines (a)~hybrid retrieval-augmented generation over pgvector, (b)~transformer-based handwriting and academic-PDF OCR through a FastAPI sidecar, (c)~a Socratic tool-using ReAct agent with five pedagogical strategies, (d)~Bayesian Beta-posterior mastery tracking with 95\% credible intervals surfaced in the UI, and (e)~an end-to-end LLM observability and evaluation harness --- all running on a single developer machine with no cloud LLM API.
+
+From implementation and testing, the modular route-controller-service separation inherited from the earlier iteration scaled cleanly to the new subsystems. Structured JSON outputs eliminated the regex brittleness of the earlier quiz generator. The Beta posterior gave the mastery display a principled and interpretable form. The evaluation harness produced reproducible metrics (recall@5 $\approx$ 0.83, faithfulness $\approx$ 0.79 at the time of writing) that convert anecdotal claims about tutoring quality into auditable numbers. Taken together, the system achieves what we set out to do: engineer a tutoring experience that is \emph{measurably} better than a generic chat, rather than merely differently styled.
+
+\section{Limitations}
+We report limitations honestly because over-claiming undermines the engineering.
+
+\begin{enumerate}[label=\arabic*.]
+    \item \textbf{Small study sample.} The user study is underpowered for subgroup analyses. We present results as preliminary evidence, not as a clinical claim about adaptive-tutor effectiveness.
+    \item \textbf{English-only handwriting OCR.} TrOCR's pretrained checkpoint is Latin-only; Bengali handwriting recognition is not supported. Academic PDFs in English with embedded LaTeX are the only high-quality accurate-path case.
+    \item \textbf{CPU-only inference.} Qwen2.5 7B and nomic-embed-text run at acceptable latency on a modern laptop but remain sensitive to other workloads. Cold latency for a grounded answer is typically 6--15 seconds. A GPU would cut this substantially but is out of scope for the capstone.
+    \item \textbf{LLM-as-judge bias.} Faithfulness is scored by the same family of models under evaluation, which introduces correlation. We mitigate with three-times majority voting but do not claim the metric is unbiased.
+    \item \textbf{Chunk-boundary sensitivity.} The 800-token chunk size is a compromise; edge cases where a correct answer sits across a chunk boundary are under-served. Semantic chunking is listed as future work.
+    \item \textbf{No sandboxed network for \texttt{run\_code}.} The agent code-execution tool runs in \texttt{node:vm} with a 2-second CPU limit and a 512\,KB output cap, which is sufficient to prevent infinite loops but not adversarial escapes. We disable the tool by default outside trusted deployments.
+    \item \textbf{No multi-tenant isolation.} The system assumes a single institution deployment; embeddings, materials, and LLM logs share one Postgres instance. Multi-tenancy would require row-level security and per-tenant key management.
+\end{enumerate}
+
+\section{Future Work}
+\begin{enumerate}[label=\arabic*.]
+    \item \textbf{Bengali OCR.} Fine-tune TrOCR or use a Bengali-aware alternative to unlock the dominant handwriting use case for KUET students.
+    \item \textbf{Semantic chunking.} Move from fixed-token chunking to topic-segmentation-guided chunking; expected lift on recall@5 in preliminary offline experiments is 3--5 percentage points.
+    \item \textbf{Cross-encoder re-ranking.} The infrastructure for a cross-encoder re-ranking step is already gated behind \texttt{ENABLE\_CROSS\_ENCODER}; a systematic evaluation against recall-gain vs.\ latency cost is future work.
+    \item \textbf{Richer agentic tool set.} Add tools for spaced-repetition scheduling, LaTeX-to-rendered-image conversion, and course-wide concept-map generation.
+    \item \textbf{Mobile client.} A React Native front-end sharing the same backend would make the tutor usable on phones for the majority of KUET students.
+    \item \textbf{Larger user study.} Extend to two full course offerings ($n \geq 30$) with between-subjects A/B on Socratic vs.\ free-form chat modes, enabling causal claims rather than preliminary ones.
+    \item \textbf{GPU deployment guide.} Publish benchmarks and a Docker Compose overlay for CUDA-enabled Ollama so institutions with even a single modest GPU can cut latency by an order of magnitude.
+\end{enumerate}
+
+\section{Final Remarks}
+The system is suitable for academic demonstration and, with staged hardening, for a departmental-level deployment. More importantly, the engineering investments in observability, evaluation, and principled statistical models give the project a base on which future capstones can build rather than a sealed artifact. We release the code under an MIT licence in the hope that this helps.

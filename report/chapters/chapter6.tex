@@ -1,0 +1,94 @@
+\chapter{Complex Engineering Problems and Activities}
+
+\section{Overview}
+Engineering complexity arises when problems cannot be solved by straightforward application of standard knowledge and require judgment, analysis of trade-offs, and creative synthesis across multiple disciplines. This chapter maps the five most technically demanding sub-problems addressed in Cognitive Copilot against the criteria used in accreditation frameworks (Washington Accord / NBA) for complex engineering problems.
+
+\section{Complex Engineering Problems Addressed}
+
+\subsection{Problem 1: Grounded, Cited Answer Generation via Hybrid Retrieval}
+\textbf{Nature of complexity.} Retrieval-augmented generation requires co-optimising two independently hard problems: information retrieval (sparse and dense) and constrained text generation. Neither problem is solvable in isolation: a retriever with poor recall produces cited-but-wrong answers; a generator unconstrained by retrieved context produces fluent hallucinations. Combining them within a latency budget on CPU-only hardware adds a third constraint.
+
+\textbf{Technical decisions made.}
+\begin{enumerate}[label=\alph*)]
+    \item BM25 is implemented over Postgres \texttt{tsvector} rather than a dedicated search engine (Elasticsearch, Solr) to keep the deployment stack to a single database service. The trade-off is reduced BM25 flexibility (no custom analyzers), accepted because the vocabulary is academic English.
+    \item Cosine similarity is served by \texttt{pgvector} with HNSW indexing ($m=16$, $ef\_\text{construction}=64$). These parameters balance recall (98\% at 1000 vectors) against index build time on CPU-only hardware.
+    \item Reciprocal Rank Fusion with $K=60$ combines the two ranking lists without requiring score calibration --- a deliberate simplification whose correctness was verified against the 40-question golden dataset (recall@5 = 0.83, above the 0.80 target).
+    \item SSE streaming is used for the answer so the user sees tokens incrementally; a final citation frame delivers metadata without blocking the token stream.
+\end{enumerate}
+
+\textbf{Complexity criteria met.} Involves conflicting constraints (latency vs.\ recall), requires non-standard knowledge (vector indexing, rank fusion theory), and demonstrates measurable performance improvement over the baseline (from zero grounded answers to recall@5 = 0.83).
+
+\subsection{Problem 2: Bounded Agentic Reasoning with Tool Use}
+\textbf{Nature of complexity.} An LLM agent must decide at each step whether to call a tool or produce an answer. This is a sequential decision problem with a non-deterministic state transition function (LLM output). Implementing it reliably requires: (a) a structured output format the LLM will not deviate from, (b) explicit iteration and wall-clock bounds to prevent runaway inference, (c) a fallback when the model produces malformed tool calls, and (d) logging of every step for audit.
+
+\textbf{Technical decisions made.}
+\begin{enumerate}[label=\alph*)]
+    \item Ollama's \texttt{format} parameter constrains generation to a JSON schema defining the \texttt{thought}/\texttt{action}/\texttt{action\_input} fields. This eliminates brittle post-hoc regex parsing.
+    \item The loop is capped at five iterations and twelve seconds wall-clock. On iteration five or timeout, the accumulated context is used directly for a final answer generation without a tool call.
+    \item Tool errors are caught and serialised as a \texttt{tool\_result} entry; the model is instructed to adjust its plan rather than retry blindly.
+    \item Every loop step is written to \texttt{LlmCall} with the same \texttt{parentCallId}, enabling the instructor dashboard to reconstruct the full agent trace post-hoc.
+\end{enumerate}
+
+\textbf{Complexity criteria met.} Involves depth of analysis (sequential reasoning with branching), non-deterministic components (LLM), and a need for systematic bounds to ensure safety and predictability.
+
+\subsection{Problem 3: Asynchronous ML Inference without Blocking HTTP}
+\textbf{Nature of complexity.} CPU-bound ML inference (nomic-embed-text embedding, TrOCR, Nougat) can take 2--30 seconds per call. If these calls block the HTTP event loop, the entire API becomes unresponsive for all users during a single upload. Node.js is single-threaded; the Python sidecar is multi-process but still CPU-bound. Coordinating asynchronous execution across two runtimes and keeping state consistent (ingest status, error reporting) is non-trivial.
+
+\textbf{Technical decisions made.}
+\begin{enumerate}[label=\alph*)]
+    \item All heavy inference calls are moved to BullMQ workers (\texttt{ingest.worker.ts}, \texttt{ocr.worker.ts}) running in separate Node.js processes. The HTTP handler enqueues a job and returns immediately with a \texttt{202 Accepted} response.
+    \item Worker jobs write their progress to \texttt{Material.ingestStatus} (PENDING $\to$ PROCESSING $\to$ DONE/FAILED) so the frontend can poll or receive a Socket.IO notification on completion.
+    \item BullMQ retry policy uses exponential back-off (3 attempts, 5 s / 30 s / 120 s) so transient sidecar failures recover automatically.
+    \item The \texttt{ocrJobDuration} Prometheus histogram records sidecar round-trip time per quality tier, enabling capacity planning.
+\end{enumerate}
+
+\textbf{Complexity criteria met.} Requires wide engineering knowledge (event loop, IPC, queue design, distributed state), involves conflicting constraints (throughput vs.\ latency), and requires systematic design rather than local fixes.
+
+\subsection{Problem 4: Structured LLM Output and JSON Schema Constraints}
+\textbf{Nature of complexity.} LLMs can generate arbitrary text, making it difficult to extract structured data reliably. The quiz generator requires a specific JSON schema: an array of five objects each with \texttt{question}, \texttt{options} (four strings), \texttt{correct} (one letter), and \texttt{explanation}. A single deviation (extra commentary, misplaced brace) causes a JSON parse error that crashes the quiz flow.
+
+\textbf{Solution and trade-offs.} Ollama's \texttt{format} parameter accepts a JSON schema and constrains generation via grammar-based decoding. This gives zero parse failures across 200 test generations, verified in a stability test script. The trade-off is that grammar-constrained generation has slightly lower diversity than unconstrained generation; this is acceptable for a fixed-schema quiz format. The \texttt{chatCompletionStructured} function in \texttt{ollama.service.ts} encapsulates this behaviour for all structured calls.
+
+\textbf{Complexity criteria met.} Requires identification and application of appropriate theoretical knowledge (constrained decoding), involves a risk of incorrect application, and demonstrates a measurable quality outcome (0 parse failures).
+
+\subsection{Problem 5: Calibrated Mastery Estimation with Minimal Data}
+\textbf{Nature of complexity.} Estimating a student's mastery from fewer than twenty quiz answers requires a principled statistical model that does not over- or under-fit. A point estimate with no uncertainty leads to premature difficulty targeting. A flat uniform distribution leads to no adaptation. The model must also handle the cold-start case (zero answers) gracefully without defaulting to a misleadingly high or low mastery score.
+
+\textbf{Solution and trade-offs.} The conjugate Beta posterior with uniform prior $\mathrm{Beta}(1,1)$ gives a posterior mean of $0.5$ and maximal variance at cold-start --- interpretable as ``we have no information yet, so we split difficulty equally.'' After ten correct out of twelve answers, the posterior is $\mathrm{Beta}(11,3)$, mean $0.79$, 95\% CI $[0.55, 0.96]$, which narrows appropriately. This is simpler than Bayesian Knowledge Tracing (BKT) but produces wider credible intervals on sparse data, which is the honest behaviour for a small study. The complexity of DKT (Deep Knowledge Tracing) is unjustified for a per-student dataset of $O(10$--$100)$ attempts; Wilson et al.~\cite{wilson2016estimating} verify this empirically.
+
+\textbf{Complexity criteria met.} Requires probabilistic reasoning, involves a calibration trade-off (model complexity vs.\ data size), and produces a directly interpretable output displayed to the student.
+
+\section{Engineering Activities Performed}
+
+\begin{enumerate}[label=\arabic*.]
+    \item \textbf{Requirement decomposition.} User stories for all seven workstreams were decomposed into backend API contracts, Prisma schema changes, frontend component specifications, and acceptance tests before implementation began.
+    \item \textbf{Architecture design.} The layered route-controller-service-worker separation was established and documented with ADRs before any new code was written. Key decisions: single-database RAG (vs.\ separate vector store), sidecar for Python ML (vs.\ Python everywhere), BullMQ for all heavy jobs (vs.\ inline async/await).
+    \item \textbf{Database schema design.} The Prisma schema was extended with five new models (\texttt{Embedding}, \texttt{LlmCall}, \texttt{QuestionBank}, \texttt{StudySession}) and three new enums. The HNSW and GIN index parameters were chosen based on pgvector documentation and tested against a 10k-vector load.
+    \item \textbf{Iterative integration testing.} Frontend-backend integration was validated at each API boundary using Postman for streaming endpoints and the browser DevTools EventSource inspector for SSE frames.
+    \item \textbf{Automated golden-dataset evaluation.} A 40-question Q\&A dataset with expected citations was curated and used to run reproducible recall@K and faithfulness metrics before each significant retrieval change.
+    \item \textbf{Stability testing.} The quiz generation stability test (\texttt{npm run test:quiz-stability}) runs 200 consecutive quiz generations and asserts zero parse failures, providing regression protection for the structured-output pipeline.
+    \item \textbf{Container and CI build.} Multi-stage Dockerfiles minimize image sizes; GitHub Actions CI runs lint, typecheck, Vitest unit tests, and an evaluation smoke subset on every pull request.
+\end{enumerate}
+
+\section{Technical Trade-Offs}
+
+\begin{table}[H]
+\centering
+\caption{Key Engineering Trade-offs and Justifications}
+\begin{tabular}{p{2.0in}p{2.0in}p{2.0in}}
+\toprule
+\textbf{Decision} & \textbf{Trade-off accepted} & \textbf{Justification} \\
+\midrule
+pgvector in Postgres vs.\ dedicated vector DB & Limited HNSW tuning options & Single service; no extra infra \\
+BM25 via tsvector vs.\ Elasticsearch & Less analyzer flexibility & No separate search service \\
+qwen2.5:7b vs.\ larger model & Lower capability ceiling & Fits 8\,GB RAM; runs on CPU \\
+Sidecar for ML vs.\ Python monolith & Extra inter-process latency & Keeps Node image small; isolates deps \\
+BullMQ workers vs.\ serverless functions & Worker process management & Works offline; no cloud needed \\
+Conjugate Beta vs.\ BKT & Less complex state transitions & Appropriate for sparse data regime \\
+JSON-schema constrained generation vs.\ regex & Slightly less diversity & Zero parse failures vs.\ 6--9 per 200 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Outcome Against Engineering Objectives}
+All seven primary objectives stated in Chapter~I were achieved. The resulting system is: (1) modular and extensible (new AI modes added without breaking existing endpoints), (2) measurable (evaluation harness produces reproducible numbers), (3) locally deployable (no cloud LLM, one-command Docker start), (4) observable (every LLM call logged, Prometheus endpoint active), and (5) pedagogically principled (Socratic strategies, Bayesian mastery, cited answers). The engineering investments in observability and evaluation give the project a base on which future capstone projects can build rather than a sealed artifact.

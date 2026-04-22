@@ -1,0 +1,67 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Env — NEVER commit. Use .env.example as the template.
+.env
+.env.*
+!.env.example
+backend/.env
+frontend/.env
+frontend/.env.local
+ai-sidecar/.env
+
+# Build output
+dist/
+build/
+.next/
+out/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Coverage + eval artefacts
+coverage/
+backend/eval-output/
+.nyc_output/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Uploads (local dev only; prod uses Cloudinary)
+backend/uploads/
+
+# Local AI model cache
+ai-sidecar/models/
+
+# Docker volumes (compose-managed)
+*.volume/
+
+# TypeScript incremental build
+*.tsbuildinfo
+
+# Python (ai-sidecar dev)
+__pycache__/
+*.py[cod]
+.venv/
+
+# LaTeX intermediates
+report/*.aux
+report/*.log
+report/*.out
+report/*.toc
+report/*.bbl
+report/*.blg
+report/*.fls
+report/*.fdb_latexmk
+report/*.synctex.gz
+
+# Plans / scratch
+.claude/

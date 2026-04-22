@@ -1,0 +1,179 @@
+@import "tailwindcss";
+
+/*
+  Design tokens — exposed as CSS variables so dark mode is a class-swap on <html>.
+  Tailwind v4's @theme reads these and makes `text-text-primary`, `bg-bg-card` etc.
+  resolve to whichever theme is active.
+*/
+:root {
+  --color-primary: #3B82F6;
+  --color-primary-dark: #1E3A5F;
+  --color-primary-light: #DBEAFE;
+  --color-accent: #10B981;
+  --color-warning: #F59E0B;
+  --color-danger: #EF4444;
+  --color-info: #06B6D4;
+
+  --color-text-primary: #111827;
+  --color-text-secondary: #6B7280;
+  --color-text-muted: #9CA3AF;
+
+  --color-bg-main: #F3F4F6;
+  --color-bg-card: #FFFFFF;
+  --color-bg-sidebar: #1E3A5F;
+  --color-bg-elevated: #FFFFFF;
+
+  --color-border: #E5E7EB;
+  --color-border-strong: #D1D5DB;
+
+  --color-focus-ring: rgba(59, 130, 246, 0.35);
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.04);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+}
+
+html.dark {
+  --color-primary: #60A5FA;
+  --color-primary-dark: #0F172A;
+  --color-primary-light: #1E3A5F;
+  --color-accent: #34D399;
+  --color-warning: #FBBF24;
+  --color-danger: #F87171;
+  --color-info: #22D3EE;
+
+  --color-text-primary: #F3F4F6;
+  --color-text-secondary: #9CA3AF;
+  --color-text-muted: #6B7280;
+
+  --color-bg-main: #0B1220;
+  --color-bg-card: #111827;
+  --color-bg-sidebar: #0F172A;
+  --color-bg-elevated: #1F2937;
+
+  --color-border: #1F2937;
+  --color-border-strong: #374151;
+
+  --color-focus-ring: rgba(96, 165, 250, 0.45);
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.4), 0 2px 4px -2px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.5), 0 4px 6px -4px rgb(0 0 0 / 0.3);
+}
+
+@theme {
+  --color-primary: var(--color-primary);
+  --color-primary-dark: var(--color-primary-dark);
+  --color-primary-light: var(--color-primary-light);
+  --color-accent: var(--color-accent);
+  --color-warning: var(--color-warning);
+  --color-danger: var(--color-danger);
+  --color-info: var(--color-info);
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-text-muted: var(--color-text-muted);
+  --color-bg-main: var(--color-bg-main);
+  --color-bg-card: var(--color-bg-card);
+  --color-bg-sidebar: var(--color-bg-sidebar);
+  --color-bg-elevated: var(--color-bg-elevated);
+  --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+  body {
+    font-family: var(--font-sans);
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-main);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+  /* Respect reduced-motion at the platform level so motion/react picks it up. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+@layer components {
+  .sidebar-link {
+    @apply flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors;
+  }
+  .sidebar-link-active {
+    @apply bg-white/15 text-white;
+  }
+  .sidebar-link-inactive {
+    @apply text-white/70 hover:bg-white/10 hover:text-white;
+  }
+  .card {
+    @apply bg-bg-card rounded-lg border border-border p-5 shadow-sm;
+  }
+  .btn-primary {
+    @apply bg-primary text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-primary/40;
+  }
+  .btn-secondary {
+    @apply bg-bg-main text-text-primary px-4 py-2.5 rounded-lg text-sm font-medium border border-border hover:bg-bg-elevated transition-colors;
+  }
+  .btn-danger {
+    @apply bg-danger text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-danger/90 transition-colors;
+  }
+  .btn-ghost {
+    @apply px-3 py-2 rounded-lg text-sm font-medium text-text-secondary hover:text-text-primary hover:bg-bg-main transition-colors;
+  }
+  .input {
+    @apply w-full h-10 px-3 border border-border rounded-lg text-sm bg-bg-card text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors;
+  }
+  .label {
+    @apply block text-sm font-medium text-text-primary mb-1.5;
+  }
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  .page-title {
+    @apply text-2xl font-bold text-text-primary;
+  }
+  /* Skeleton shimmer — honours prefers-reduced-motion via the base block. */
+  .skeleton {
+    @apply bg-bg-main rounded-md relative overflow-hidden;
+  }
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--color-text-muted) 20%, transparent),
+      transparent
+    );
+    animation: shimmer 1.4s infinite;
+  }
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+}

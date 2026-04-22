@@ -1,0 +1,509 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+// ─── Enums ─────────────────────────────────────────────────
+
+enum Role {
+  STUDENT
+  MENTOR
+  TUTOR
+  ADMIN
+}
+
+enum CommunityRole {
+  STUDENT
+  TUTOR
+}
+
+enum TimeFormat {
+  H24
+  H12
+}
+
+enum DateFormat {
+  MDY
+  DMY
+  DD_MM_YYYY
+  MM_DD_YYYY
+  YYYY_MM_DD
+}
+
+enum DayOfWeek {
+  MON
+  TUE
+  WED
+  THU
+  FRI
+  SAT
+  SUN
+}
+
+enum CourseType {
+  THEORY
+  LAB
+}
+
+enum SlotType {
+  CLASS
+  LAB
+}
+
+enum MaterialType {
+  PDF
+  LINK
+  VIDEO
+  IMAGE
+  NOTE
+}
+
+enum NotificationType {
+  NEW_COURSE
+  MESSAGE
+  SYSTEM
+  MY_COURSE
+  CLASS_REMINDER
+  LAB_REMINDER
+  EXAM_REMINDER
+  TOPIC_SUGGESTION
+  MATERIAL_UPLOAD_PROMPT
+  ANNOUNCEMENT
+  ATTENDANCE_ALERT
+}
+
+enum ScanStatus {
+  PENDING
+  PROCESSING
+  DONE
+  FAILED
+}
+
+enum TopicStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  DONE
+}
+
+// OCR processing quality tiers.
+enum OcrQuality {
+  FAST       // Tesseract.js / pdf-parse / mammoth — no sidecar.
+  ACCURATE   // Python sidecar: TrOCR / Nougat / Unstructured.
+}
+
+// Ingestion job state for RAG embeddings.
+enum IngestStatus {
+  PENDING
+  PROCESSING
+  DONE
+  FAILED
+}
+
+// LLM call outcome.
+enum LlmCallStatus {
+  OK
+  ERROR
+  TIMEOUT
+}
+
+// Tutor pedagogical strategy chosen for a turn.
+enum TutorStrategy {
+  EXPLAIN
+  SOCRATIC
+  HINT_LADDER
+  WORKED_EXAMPLE
+  MISCONCEPTION_PROBE
+}
+
+// ─── Models ────────────────────────────────────────────────
+
+model User {
+  id             String     @id @default(cuid())
+  name           String
+  email          String     @unique
+  universityName String
+  passwordHash   String
+  avatarUrl      String?
+  bio            String?
+  phone          String?
+  rollNumber     String?
+  session        String?
+  department     String?
+  role           Role       @default(STUDENT)
+  language       String     @default("en")
+  timezone       String     @default("UTC")
+  timeFormat     TimeFormat @default(H24)
+  dateFormat     DateFormat @default(DMY)
+
+  // Notification preferences
+  notifChat          Boolean @default(true)
+  notifNewestUpdate  Boolean @default(true)
+  notifMentorOfMonth Boolean @default(false)
+  notifCourseOfMonth Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  enrollments         Enrollment[]
+  notifications       Notification[]
+  messages            Message[]          @relation("SentMessages")
+  threads             Thread[]
+  threadPosts         ThreadPost[]
+  exams               ExamAttempt[]
+  attendance          AttendanceRecord[]
+  threadLikes         ThreadLike[]
+  routineScans        RoutineScan[]
+  communityMembers    CommunityMember[]
+  createdCommunities  Community[]        @relation("CommunityCreator")
+  announcements       Announcement[]
+  markUploads         MarkUpload[]
+  llmCalls            LlmCall[]
+  studySessions       StudySession[]
+}
+
+model Course {
+  id         String     @id @default(cuid())
+  courseCode  String
+  courseName  String
+  courseType  CourseType @default(THEORY)
+  category   String?  // "Design", "Code", "Soft Skill"
+  level      String   @default("Beginner") // "Beginner", "Intermediate", "Master"
+  thumbnail  String?
+  duration   String?  // e.g. "12h 30m"
+  rating     Float    @default(0)
+  studentCount Int    @default(0)
+  createdAt  DateTime @default(now())
+
+  enrollments Enrollment[]
+  schedule    ScheduleSlot[]
+  topics      Topic[]
+  threads     Thread[]
+  communities Community[]
+}
+
+model Enrollment {
+  id       String  @id @default(cuid())
+  userId   String
+  courseId  String
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course   Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  ctScore1 Float?
+  ctScore2 Float?
+  ctScore3 Float?
+  labScore Float?
+
+  @@unique([userId, courseId])
+}
+
+model ScheduleSlot {
+  id        String    @id @default(cuid())
+  courseId  String
+  course    Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  dayOfWeek DayOfWeek
+  startTime String    // "09:00"
+  endTime   String    // "10:30"
+  type      SlotType  @default(CLASS)
+  room      String?
+
+  attendance AttendanceRecord[]
+}
+
+model Topic {
+  id          String      @id @default(cuid())
+  courseId    String
+  course      Course      @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  weekNumber  Int?
+  sessionDate DateTime?
+  orderIndex  Int         @default(0)
+  status      TopicStatus @default(NOT_STARTED)
+  createdAt   DateTime    @default(now())
+
+  materials     Material[]
+  topicProgress TopicProgress[]
+}
+
+model Material {
+  id            String       @id @default(cuid())
+  topicId       String
+  topic         Topic        @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  title         String
+  fileUrl       String
+  fileType      MaterialType
+  publicId      String?      // Cloudinary public_id
+  uploadedAt    DateTime     @default(now())
+
+  // RAG ingestion state.
+  hasEmbeddings Boolean      @default(false)
+  ingestStatus  IngestStatus @default(PENDING)
+  ingestError   String?
+  chunkCount    Int          @default(0)
+  ocrQuality    OcrQuality   @default(FAST)
+
+  embeddings    Embedding[]
+}
+
+model TopicProgress {
+  id             String    @id @default(cuid())
+  userId        String
+  topicId       String
+  topic          Topic     @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  expertiseLevel Float     @default(0) // 0.0 to 1.0 — posterior mean of alpha/(alpha+beta)
+  studyMinutes   Int       @default(0)
+  examScore      Float?
+  lastStudied    DateTime?
+
+  // Bayesian Beta posterior for adaptive difficulty (replaces +0.1/-0.05 rule).
+  // Prior: Beta(1,1) = uniform. Each correct answer → alpha++, wrong → beta++.
+  alpha          Float     @default(1)
+  beta           Float     @default(1)
+
+  @@unique([userId, topicId])
+}
+
+model AttendanceRecord {
+  id      String   @id @default(cuid())
+  userId String
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slotId String
+  slot    ScheduleSlot @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  date    DateTime
+  present Boolean  @default(false)
+
+  @@unique([userId, slotId, date])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId   String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+  metadata  Json?            // { courseId, topicId, examId }
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  senderId  String
+  sender     User     @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiverId String
+  content    String
+  fileUrl    String?
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}
+
+model Thread {
+  id        String   @id @default(cuid())
+  courseId  String?
+  course    Course?  @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  creatorId String
+  creator   User     @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  tags      String[]
+  createdAt DateTime @default(now())
+
+  posts ThreadPost[]
+  likes ThreadLike[]
+}
+
+model ThreadPost {
+  id        String   @id @default(cuid())
+  threadId String
+  thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  authorId String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  content   String
+  fileUrl   String?
+  createdAt DateTime @default(now())
+}
+
+model ThreadLike {
+  id       String @id @default(cuid())
+  threadId String
+  thread   Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  userId  String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([threadId, userId])
+}
+
+model ExamAttempt {
+  id        String   @id @default(cuid())
+  userId   String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId  String
+  questions Json     // [{q, options[], correct, userAnswer}]
+  score     Float
+  totalQ    Int
+  timeTaken Int      // seconds
+  createdAt DateTime @default(now())
+}
+
+model RoutineScan {
+  id            String     @id @default(cuid())
+  userId       String
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fileUrl       String
+  extractedText String
+  parsedCodes   String[]
+  status        ScanStatus @default(PENDING)
+  createdAt     DateTime   @default(now())
+}
+
+// ─── Community / Classroom Models ──────────────────────────
+
+model Community {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  courseId     String
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  createdBy   String
+  creator     User     @relation("CommunityCreator", fields: [createdBy], references: [id], onDelete: Cascade)
+  courseCode   String
+  session     String
+  department  String
+  university  String
+  createdAt   DateTime @default(now())
+
+  members       CommunityMember[]
+  announcements Announcement[]
+  markUploads   MarkUpload[]
+}
+
+model CommunityMember {
+  id          String        @id @default(cuid())
+  communityId String
+  community   Community     @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        CommunityRole @default(STUDENT)
+  joinedAt    DateTime      @default(now())
+
+  @@unique([communityId, userId])
+}
+
+model Announcement {
+  id          String    @id @default(cuid())
+  communityId String
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  authorId    String
+  author      User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  title       String
+  body        String
+  fileUrl     String?
+  createdAt   DateTime  @default(now())
+}
+
+model MarkUpload {
+  id             String    @id @default(cuid())
+  communityId    String
+  community      Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  uploadedBy     String
+  uploader       User      @relation(fields: [uploadedBy], references: [id], onDelete: Cascade)
+  fileUrl        String
+  processedCount Int       @default(0)
+  errorCount     Int       @default(0)
+  errors         Json?
+  createdAt      DateTime  @default(now())
+}
+
+// ─── RAG / AI-Copilot Models ───────────────────────────────
+// The `embedding` vector column and `tsv` tsvector column are managed
+// via raw SQL migration — Prisma tags them Unsupported so queries use
+// $queryRaw / $executeRaw. See prisma/migrations/..._pgvector/
+
+model Embedding {
+  id         String   @id @default(cuid())
+  materialId String
+  material   Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  chunkIndex Int
+  content    String   // The raw chunk text (also indexed into tsv for BM25).
+  page       Int?     // Page number when available (PDFs).
+  heading    String?  // Nearest section heading, if parseable.
+  tokenCount Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  // Managed by raw SQL:
+  //   embedding  vector(768)       — HNSW indexed (cosine).
+  //   tsv        tsvector          — GIN indexed (BM25).
+
+  @@index([materialId])
+  @@index([materialId, chunkIndex])
+}
+
+// Every LLM call logged here for observability and eval.
+// ReAct loop steps share a parentCallId with the root turn.
+model LlmCall {
+  id               String        @id @default(cuid())
+  userId           String?
+  user             User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  route            String        // "chat" | "ask-course" | "quiz-gen" | "react-step" | "embed" | "eval-judge" ...
+  model            String
+  strategy         TutorStrategy?
+  toolName         String?       // When this is a react-step.
+  prompt           Json
+  completion       String
+  toolCalls        Json?
+  promptTokens     Int           @default(0)
+  completionTokens Int           @default(0)
+  latencyMs        Int           @default(0)
+  costUsd          Float         @default(0) // Zero for Ollama; tracked for future-proofing.
+  parentCallId     String?
+  parent           LlmCall?      @relation("LlmCallChain", fields: [parentCallId], references: [id], onDelete: SetNull)
+  children         LlmCall[]     @relation("LlmCallChain")
+  status           LlmCallStatus @default(OK)
+  errorMsg         String?
+  // Free-form metadata — retrieval citations, courseId, topicId, etc.
+  metadata         Json?
+  createdAt        DateTime      @default(now())
+
+  @@index([userId, createdAt])
+  @@index([route, createdAt])
+  @@index([status, createdAt])
+}
+
+// Curated question bank for adaptive difficulty targeting.
+// LLM-generated questions fall back to difficulty 3.
+model QuestionBank {
+  id          String    @id @default(cuid())
+  topicId     String
+  question    String
+  options     Json      // ["A) ...", "B) ...", "C) ...", "D) ..."]
+  correct     String    // "A" | "B" | "C" | "D"
+  explanation String?
+  difficulty  Int       @default(3) // 1 (easy) .. 5 (hard). Updated via Elo-lite on attempts.
+  createdAt   DateTime  @default(now())
+  source      String    @default("llm") // "llm" | "curated" | "imported"
+
+  @@index([topicId, difficulty])
+}
+
+// User-study opt-in + telemetry scoping.
+model StudySession {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cohort      String    @default("pilot")
+  preTest     Json?     // { score: 0-10, answers: [...] }
+  postTest    Json?
+  susScore    Float?    // System Usability Scale (0-100)
+  npsScore    Int?      // Net Promoter Score (0-10)
+  notes       String?
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@unique([userId, cohort])
+}

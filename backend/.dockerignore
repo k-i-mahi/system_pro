@@ -1,0 +1,13 @@
+node_modules
+dist
+coverage
+.env
+.env.*
+!.env.example
+*.log
+.vscode
+.idea
+tests/__snapshots__
+eval-output
+uploads
+.git

@@ -1,0 +1,176 @@
+# Cognitive Copilot — Docker Compose
+# Profiles:
+#   (default)  postgres + redis + ai-sidecar       — infra for local dev
+#   ollama     adds the ollama LLM server          — use if you don't have Ollama installed natively
+#   prod-local adds backend+frontend+caddy (self-signed TLS) for on-device prod demo
+#   prod       adds backend+frontend+caddy with auto-HTTPS via DOMAIN env
+#
+# Examples:
+#   docker compose up -d                               # just infra
+#   docker compose --profile ollama up -d              # infra + ollama
+#   docker compose --profile prod-local up -d --build  # full local prod demo
+
+services:
+  postgres:
+    # pgvector image — required for RAG embeddings.
+    # Base tag matches Prisma-tested Postgres 15.
+    image: pgvector/pgvector:pg15
+    container_name: copilot-postgres
+    restart: unless-stopped
+    ports:
+      - '5433:5432'
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-copilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-copilot}
+      POSTGRES_DB: ${POSTGRES_DB:-copilot_db}
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-copilot} -d ${POSTGRES_DB:-copilot_db}']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: copilot-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    volumes:
+      - redisdata:/data
+
+  # Python sidecar for heavy AI work:
+  #   - Handwriting OCR (TrOCR)
+  #   - Academic-PDF OCR with math (Nougat)
+  #   - Layout-aware parsing (Unstructured)
+  #   - RAGAS-style eval scoring
+  # Boots lazily — first request downloads model weights (~3 GB) into ai-models volume.
+  ai-sidecar:
+    build:
+      context: ./ai-sidecar
+      dockerfile: Dockerfile
+    container_name: copilot-ai-sidecar
+    restart: unless-stopped
+    ports:
+      - '8000:8000'
+    environment:
+      HF_HOME: /models
+      TRANSFORMERS_CACHE: /models
+      TORCH_HOME: /models/torch
+    volumes:
+      - ai-models:/models
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:8000/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  # Optional: containerized Ollama (use --profile ollama).
+  # Defaults assume host-native Ollama on localhost:11434, which is faster.
+  ollama:
+    profiles: ['ollama', 'prod-local', 'prod']
+    image: ollama/ollama:latest
+    container_name: copilot-ollama
+    restart: unless-stopped
+    ports:
+      - '11434:11434'
+    volumes:
+      - ollamadata:/root/.ollama
+    healthcheck:
+      test: ['CMD-SHELL', 'ollama list >/dev/null 2>&1 || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  # Bootstrap: pull Ollama models on first run so the tutor works out of the box.
+  ollama-init:
+    profiles: ['ollama', 'prod-local', 'prod']
+    image: ollama/ollama:latest
+    container_name: copilot-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        ollama pull qwen2.5:7b-instruct || true
+        ollama pull nomic-embed-text || true
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    restart: 'no'
+
+  backend:
+    profiles: ['prod-local', 'prod']
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: copilot-backend
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      ai-sidecar: { condition: service_started }
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-copilot}:${POSTGRES_PASSWORD:-copilot}@postgres:5432/${POSTGRES_DB:-copilot_db}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      AI_SIDECAR_URL: http://ai-sidecar:8000
+      AUTH_SECRET: ${AUTH_SECRET}
+      METRICS_KEY: ${METRICS_KEY:-change-me}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
+      NODE_ENV: production
+    expose:
+      - '3001'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3001/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 6
+
+  frontend:
+    profiles: ['prod-local', 'prod']
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: copilot-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    expose:
+      - '80'
+
+  # Caddy reverse proxy — auto-HTTPS in prod, self-signed locally.
+  caddy:
+    profiles: ['prod-local', 'prod']
+    image: caddy:2-alpine
+    container_name: copilot-caddy
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  pgdata:
+  redisdata:
+  ai-models:
+  ollamadata:
+  caddydata:
+  caddyconfig:

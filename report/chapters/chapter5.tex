@@ -1,0 +1,63 @@
+\chapter{Societal, Health, Safety, Legal, Cultural and Environmental Considerations}
+
+\section{Societal Considerations}
+Cognitive Copilot addresses a concrete socioeconomic barrier: access to quality tutoring support. Private tuition is expensive and unavailable to many university students in Bangladesh. A local-first AI tutor that runs on department hardware costs nothing per query and is accessible to every enrolled student 24 hours a day. The grounded citation model further ensures that answers are tied to the course materials chosen by the faculty, not to generic internet text, which keeps the tutoring aligned with institutional learning objectives.
+
+The community discussion and announcement modules promote peer-to-peer learning and reduce information asymmetry between instructors and students. Real-time Socket.IO notifications ensure that time-sensitive information (class cancellations, assignment deadlines) reaches students immediately rather than through delayed email chains.
+
+\section{Health and Safety Considerations}
+The platform itself introduces no direct physical hazard. However, two behavioural risks require acknowledgment.
+
+\begin{enumerate}[label=\arabic*.]
+    \item \textbf{Screen time and sedentary study.} Extended device use is an established health concern. The system does not include usage limits, but institutional deployment guidelines should recommend scheduled breaks.
+    \item \textbf{Over-reliance on AI-generated answers.} A student who accepts the tutor's explanation without independent verification may develop superficial understanding. The ``AI-transcribed --- please verify'' banner on sidecar OCR output, the Socratic strategy that withholds direct answers, and the citation model that forces reference back to source material all mitigate this risk by design.
+\end{enumerate}
+
+\section{Data Privacy and Security}
+The platform processes personally identifiable data (name, email, course enrollment, quiz performance history, and conversation logs). The following controls are in place.
+
+\begin{table}[H]
+\centering
+\caption{Security Controls and Compliance Notes}
+\begin{tabular}{p{2.5in}p{3.5in}}
+\toprule
+\textbf{Risk} & \textbf{Control} \\
+\midrule
+Unauthorised account access          & JWT (15 min) + refresh token rotation; bcrypt password hashing \\
+Privilege escalation                 & Role-based middleware guard on all protected routes \\
+Insecure file upload                 & MIME-type validation; uploads processed in worker, not HTTP thread \\
+LLM conversation data leakage        & All inference is local (Ollama); no data sent to cloud APIs \\
+Sensitive metrics exposure           & \texttt{/metrics} Prometheus endpoint gated by \texttt{X-Metrics-Key} header \\
+SQL injection                        & All queries via Prisma parameterised ORM; raw SQL used only for vector ops \\
+XSS via LLM output                   & Citation rendering uses React \texttt{dangerouslySetInnerHTML} only on sanitised text \\
+Notification delivery failure        & BullMQ exponential back-off retry (3 attempts) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Since all LLM inference runs locally through Ollama, student conversations never leave the institution's server. This is a deliberate design choice that eliminates the primary data-privacy risk of cloud-AI tutors.
+
+\section{Legal and Ethical Considerations}
+\textbf{Academic integrity.} The AI tutor is designed as a study aid, not as an answer generator for assessments. The Socratic strategy deliberately withholds answers to encourage independent reasoning. Institutional deployment should pair the tool with a clear academic-integrity policy statement.
+
+\textbf{Model bias.} Qwen2.5 7B and nomic-embed-text are general-purpose models trained on primarily English text. Their outputs may reflect biases present in the training corpus. Faculty should review AI-generated explanations before endorsing them as canonical.
+
+\textbf{TrOCR Latin-only limitation.} The handwriting OCR model does not support Bengali script, which is the dominant handwriting language for KUET students. This limitation is documented prominently in the UI and in Chapter~\ref{ch:limitations} of this report. Deployers must not present TrOCR output as reliable for Bengali handwriting.
+
+\textbf{LLM-as-judge evaluation bias.} The faithfulness metric is scored by the same model family being evaluated. We report this limitation explicitly and use three-times majority voting to reduce variance.
+
+\section{Cultural Considerations}
+\textbf{Language.} The current interface is English-only. KUET students use both Bengali and English; future work should add Bengali UI labels and support Bengali academic PDFs through a Bengali-capable OCR model.
+
+\textbf{Date and time format.} The system stores timestamps in UTC and allows per-user date format preference (ISO, US, BD) so that schedule display matches local convention.
+
+\textbf{Community norms.} The community discussion module allows faculty to moderate thread content. Deployment guidelines should establish a code of conduct appropriate for academic discourse.
+
+\textbf{Diversity in learning styles.} The five pedagogical strategies (Explain, Socratic, Hint Ladder, Worked Example, Misconception Probe) accommodate different learning preferences rather than applying a one-size-fits-all approach.
+
+\section{Environmental Considerations}
+\textbf{Compared to cloud AI.} Running inference locally eliminates network round-trips and cloud data-center energy usage for inference. The institution controls when and how the Ollama service runs, enabling scheduled shutdown during off-hours to reduce idle power consumption.
+
+\textbf{Local hardware cost.} CPU-only inference on Qwen2.5 7B draws approximately 20--40\,W of additional CPU power per concurrent user (measured on an AMD Ryzen 7 laptop). For a small departmental deployment of 20 concurrent users, this is comparable to a single CRT monitor and is environmentally negligible relative to the educational value delivered.
+
+\textbf{Model efficiency.} Using a 7\,B-parameter quantised model rather than GPT-4-class (100B+) models reduces per-query energy consumption by roughly two orders of magnitude at the cost of some capability ceiling. For the structured tasks in this system (quiz, citation, Socratic prompt), the 7B model is adequate and the energy-quality trade-off is favourable.

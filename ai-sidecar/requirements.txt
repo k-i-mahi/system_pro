@@ -1,0 +1,21 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+pydantic==2.9.2
+pillow==10.4.0
+# Torch pinned to CPU build; GPU users override at build time.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.3.1
+torchvision==0.18.1
+transformers==4.45.1
+sentencepiece==0.2.0
+# PDF + layout
+pypdfium2==4.30.0
+pdf2image==1.17.0
+# Nougat-small weight download happens at first call.
+nougat-ocr==0.1.17
+# Layout-aware parser
+unstructured[pdf]==0.15.13
+# Metrics for eval scoring
+jiwer==3.0.4
+numpy==1.26.4
