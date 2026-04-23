@@ -14,12 +14,12 @@
         format console
     }
 
-    # Backend — Express + SSE + Socket.IO.
+    # Backend API + SSE + Socket.IO.
     @api {
         path /api/*
     }
     handle @api {
-        reverse_proxy backend:3001 {
+        reverse_proxy backend-py:3001 {
             flush_interval -1   # critical for SSE streaming
             transport http {
                 read_buffer 4KB
@@ -31,7 +31,7 @@
         path /socket.io/*
     }
     handle @ws {
-        reverse_proxy backend:3001
+        reverse_proxy backend-py:3001
     }
 
     # /metrics is a prom-client scrape endpoint guarded by METRICS_KEY.
@@ -40,7 +40,7 @@
         path /metrics
     }
     handle @metrics {
-        reverse_proxy backend:3001
+        reverse_proxy backend-py:3001
     }
 
     # Everything else → SPA.

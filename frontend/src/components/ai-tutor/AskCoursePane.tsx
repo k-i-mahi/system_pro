@@ -89,8 +89,16 @@ export function AskCoursePane({ courseId, topicId, onCitationClick }: Props) {
 
           try {
             const parsed = JSON.parse(data);
-            if (currentEvent === 'token' && typeof parsed.content === 'string') {
-              accumulated += parsed.content;
+            const tokenChunk =
+              currentEvent === 'token'
+                ? typeof parsed === 'string'
+                  ? parsed
+                  : typeof parsed?.content === 'string'
+                    ? parsed.content
+                    : ''
+                : '';
+            if (tokenChunk) {
+              accumulated += tokenChunk;
               setAnswers((prev) => {
                 const updated = [...prev];
                 updated[updated.length - 1] = {

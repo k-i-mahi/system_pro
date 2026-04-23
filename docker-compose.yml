@@ -106,32 +106,43 @@ services:
       OLLAMA_HOST: http://ollama:11434
     restart: 'no'
 
-  backend:
+  backend-py:
     profiles: ['prod-local', 'prod']
     build:
-      context: ./backend
+      context: ./backend-py
       dockerfile: Dockerfile
-    container_name: copilot-backend
+    container_name: copilot-backend-py
     restart: unless-stopped
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
-      ai-sidecar: { condition: service_started }
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-copilot}:${POSTGRES_PASSWORD:-copilot}@postgres:5432/${POSTGRES_DB:-copilot_db}
       REDIS_URL: redis://redis:6379/0
-      OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      ARQ_REDIS_URL: redis://redis:6379/2
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+      OLLAMA_VISION_MODEL: ${OLLAMA_VISION_MODEL:-llava}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      OLLAMA_EMBEDDING_DIM: ${OLLAMA_EMBEDDING_DIM:-768}
       AI_SIDECAR_URL: http://ai-sidecar:8000
       AUTH_SECRET: ${AUTH_SECRET}
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET}
+      CLOUDINARY_UPLOAD_FOLDER: ${CLOUDINARY_UPLOAD_FOLDER:-cognitive-copilot}
       METRICS_KEY: ${METRICS_KEY:-change-me}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
-      NODE_ENV: production
-    expose:
-      - '3001'
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176}
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3001
+    ports:
+      - '3001:3001'
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost:3001/health || exit 1']
+      test:
+        [
+          'CMD-SHELL',
+          'python -c "import urllib.request; urllib.request.urlopen(\"http://localhost:3001/health\")" || exit 1',
+        ]
       interval: 15s
       timeout: 5s
       retries: 6
@@ -144,7 +155,7 @@ services:
     container_name: copilot-frontend
     restart: unless-stopped
     depends_on:
-      - backend
+      - backend-py
     expose:
       - '80'
 
@@ -155,8 +166,8 @@ services:
     container_name: copilot-caddy
     restart: unless-stopped
     ports:
-      - '80:80'
-      - '443:443'
+      - '${HTTP_PORT:-80}:80'
+      - '${HTTPS_PORT:-443}:443'
     environment:
       DOMAIN: ${DOMAIN:-localhost}
     volumes:
@@ -164,7 +175,7 @@ services:
       - caddydata:/data
       - caddyconfig:/config
     depends_on:
-      - backend
+      - backend-py
       - frontend
 
 volumes:

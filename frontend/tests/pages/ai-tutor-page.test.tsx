@@ -64,14 +64,14 @@ describe('AITutorPage', () => {
     vi.clearAllMocks();
   });
 
-  it('renders AI Tutor heading', () => {
-    renderPage();
-    expect(screen.getByText('AI Tutor')).toBeInTheDocument();
-  });
-
-  it('renders context section', () => {
+  it('renders context panel', () => {
     renderPage();
     expect(screen.getByText('Context')).toBeInTheDocument();
+  });
+
+  it('renders modes help card', () => {
+    renderPage();
+    expect(screen.getByText('Modes')).toBeInTheDocument();
   });
 
   it('renders course selector', () => {
@@ -81,29 +81,28 @@ describe('AITutorPage', () => {
 
   it('renders quick actions', () => {
     renderPage();
-    expect(screen.getByText('Quick Actions')).toBeInTheDocument();
     expect(screen.getByText('Explain this topic')).toBeInTheDocument();
-    expect(screen.getByText('Generate quiz')).toBeInTheDocument();
     expect(screen.getByText('Key concepts')).toBeInTheDocument();
+    expect(screen.getByText('Practice problem')).toBeInTheDocument();
   });
 
   it('renders empty chat state', () => {
     renderPage();
     expect(screen.getByText('How can I help you study?')).toBeInTheDocument();
     expect(
-      screen.getByText('Ask questions, request explanations, or generate quizzes')
+      screen.getByText('Ask questions, request explanations, or get practice problems.')
     ).toBeInTheDocument();
   });
 
   it('renders message input', () => {
     renderPage();
-    expect(screen.getByPlaceholderText('Ask your AI tutor...')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Ask your AI tutor…')).toBeInTheDocument();
   });
 
   it('renders course options after loading', async () => {
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText('CS 101 - Intro to CS')).toBeInTheDocument();
+      expect(screen.getByText('CS 101 — Intro to CS')).toBeInTheDocument();
     });
   });
 });

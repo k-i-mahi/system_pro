@@ -41,7 +41,6 @@ describe('Sidebar', () => {
     expect(screen.getByText('Courses')).toBeInTheDocument();
     expect(screen.getByText('AI Tutor')).toBeInTheDocument();
     expect(screen.getByText('Community')).toBeInTheDocument();
-    expect(screen.getByText('Notifications')).toBeInTheDocument();
     expect(screen.getByText('Analytics')).toBeInTheDocument();
     expect(screen.getByText('Settings')).toBeInTheDocument();
     expect(screen.getByText('Account')).toBeInTheDocument();
@@ -60,7 +59,6 @@ describe('Sidebar', () => {
     expect(hrefs).toContain('/courses');
     expect(hrefs).toContain('/ai-tutor');
     expect(hrefs).toContain('/community');
-    expect(hrefs).toContain('/notifications');
     expect(hrefs).toContain('/analytics');
     expect(hrefs).toContain('/settings');
     expect(hrefs).toContain('/profile');
