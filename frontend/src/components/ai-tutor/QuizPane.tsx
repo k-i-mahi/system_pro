@@ -28,7 +28,6 @@ interface QuizBreakdown {
 }
 
 interface QuizResult {
-  attemptId?: string;
   score: number;
   total: number;
   percentage: number;
@@ -45,10 +44,9 @@ interface QuizResult {
 interface Props {
   topicId: string;
   topicTitle?: string;
-  onReviewWrongAnswers?: (wrong: QuizBreakdown[]) => void;
 }
 
-export function QuizPane({ topicId, topicTitle, onReviewWrongAnswers }: Props) {
+export function QuizPane({ topicId, topicTitle }: Props) {
   const [questionCount, setQuestionCount] = useState(5);
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -76,7 +74,7 @@ export function QuizPane({ topicId, topicTitle, onReviewWrongAnswers }: Props) {
       setResult(null);
       setTimer(0);
     },
-    onError: () => toast.error('Failed to generate quiz. Is Ollama running?'),
+    onError: () => toast.error('Failed to generate quiz.'),
   });
 
   const submit = useMutation({
@@ -138,7 +136,7 @@ export function QuizPane({ topicId, topicTitle, onReviewWrongAnswers }: Props) {
             <div>
               <p className="font-medium text-text-primary">Ready to test your knowledge?</p>
               <p className="mt-1 text-sm text-text-secondary">
-                Adaptive-difficulty MCQs calibrated to your Beta-posterior mastery.
+                Generate MCQ questions and check your mastery instantly.
               </p>
             </div>
             <div className="mx-auto flex max-w-xs items-center gap-2">
@@ -208,27 +206,12 @@ export function QuizPane({ topicId, topicTitle, onReviewWrongAnswers }: Props) {
                   95% CI: {Math.round(result.posterior.lower * 100)}% –{' '}
                   {Math.round(result.posterior.upper * 100)}%
                 </p>
-                <p className="text-[10px] text-text-secondary">
-                  Beta(α={result.posterior.alpha.toFixed(1)}, β=
-                  {result.posterior.beta.toFixed(1)})
-                </p>
               </div>
             )}
             <div className="mt-4 flex justify-center gap-2">
               <Button variant="outline" size="sm" onClick={reset}>
                 New Quiz
               </Button>
-              {onReviewWrongAnswers && (
-                <Button
-                  size="sm"
-                  onClick={() =>
-                    onReviewWrongAnswers(result.breakdown.filter((b) => !b.isCorrect))
-                  }
-                  disabled={result.breakdown.every((b) => b.isCorrect)}
-                >
-                  Review with AI
-                </Button>
-              )}
             </div>
           </div>
         )}

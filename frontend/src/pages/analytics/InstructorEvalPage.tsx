@@ -74,7 +74,6 @@ const ROUTE_COLORS: Record<string, string> = {
   'chat.structured': '#6366f1',
   embed: '#10b981',
   'ask-course': '#8b5cf6',
-  quiz: '#f59e0b',
 };
 
 function StatCard({
@@ -321,7 +320,7 @@ export default function InstructorEvalPage() {
         </h2>
         {posteriorChartData.length === 0 ? (
           <p className="py-8 text-center text-sm text-text-secondary">
-            Take quizzes to build a mastery profile.
+            Continue studying with AI tutor to build a mastery profile.
           </p>
         ) : (
           <ResponsiveContainer width="100%" height={280}>

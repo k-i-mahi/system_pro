@@ -6,6 +6,7 @@ import {
   Users,
   BarChart3,
   Settings,
+  Shield,
   User,
   LogOut,
 } from 'lucide-react';
@@ -26,7 +27,9 @@ const navItems = [
 
 export default function Sidebar() {
   const { logout } = useAuthStore();
+  const user = useAuthStore((s) => s.user);
   const { sidebarCollapsed } = useUIStore();
+  const items = user?.role === 'ADMIN' ? [...navItems, { to: '/admin', icon: Shield, label: 'Admin Panel', tour: undefined }] : navItems;
 
   async function handleLogout() {
     try {
@@ -58,7 +61,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 py-4 px-2 space-y-1 overflow-y-auto">
-        {navItems.map((item) => (
+        {items.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}

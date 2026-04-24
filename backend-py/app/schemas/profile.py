@@ -10,6 +10,9 @@ class UpdateProfileRequest(BaseModel):
     universityName: Optional[str] = None
     bio: Optional[str] = None
     phone: Optional[str] = None
+    rollNumber: Optional[str] = None
+    session: Optional[str] = None
+    department: Optional[str] = None
 
     @field_validator("name")
     @classmethod
@@ -37,4 +40,18 @@ class UpdateProfileRequest(BaseModel):
     def phone_max(cls, v: str | None) -> str | None:
         if v is not None and len(v) > 20:
             raise ValueError("Must be at most 20 characters")
+        return v
+
+    @field_validator("rollNumber")
+    @classmethod
+    def roll_max(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 30:
+            raise ValueError("Must be at most 30 characters")
+        return v
+
+    @field_validator("session", "department")
+    @classmethod
+    def short_text_max(cls, v: str | None) -> str | None:
+        if v is not None and len(v) > 80:
+            raise ValueError("Must be at most 80 characters")
         return v

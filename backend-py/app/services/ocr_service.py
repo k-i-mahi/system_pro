@@ -105,7 +105,8 @@ async def _llm_from_text(text: str) -> list[str]:
     """Ask llama3.2 to find course codes in extracted OCR text."""
     if not text.strip():
         return []
-    prompt = _TEXT_PROMPT.format(text=text[:3000])
+    snippet = text[:3000]
+    prompt = _TEXT_PROMPT.format(text=snippet)
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             r = await client.post(
@@ -114,11 +115,68 @@ async def _llm_from_text(text: str) -> list[str]:
             )
             r.raise_for_status()
             resp = r.json().get("response", "").strip()
-            logger.info("llama3.2 → %s", resp[:200])
+            logger.info("llama3.2 codes-from-text → %s", resp[:200])
             return _parse_codes(resp)
     except Exception as exc:
         logger.error("llama3.2 failed: %s", exc)
         return []
+
+
+async def _sidecar_handwriting(image_bytes: bytes, filename: str) -> str:
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            files = {"file": (filename, image_bytes, "application/octet-stream")}
+            r = await client.post(f"{settings.AI_SIDECAR_URL}/ocr/handwriting", files=files)
+            r.raise_for_status()
+            text_value = (r.json() or {}).get("text", "")
+            logger.info("sidecar handwriting → %d chars", len(text_value))
+            return text_value
+    except Exception as exc:
+        logger.warning("sidecar handwriting failed: %s", exc)
+        return ""
+
+
+async def _sidecar_pdf(data: bytes, filename: str) -> str:
+    try:
+        async with httpx.AsyncClient(timeout=240.0) as client:
+            files = {"file": (filename, data, "application/pdf")}
+            r = await client.post(f"{settings.AI_SIDECAR_URL}/ocr/academic-pdf", files=files)
+            r.raise_for_status()
+            payload = r.json() or {}
+            pages = payload.get("pages") or []
+            if pages:
+                text_value = "\n\n".join(str(p) for p in pages)
+            else:
+                text_value = str(payload.get("text", ""))
+            logger.info("sidecar academic-pdf → %d chars", len(text_value))
+            return text_value
+    except Exception as exc:
+        logger.warning("sidecar academic-pdf failed: %s", exc)
+        return ""
+
+
+def _pdf_raster_easyocr(data: bytes, max_pages: int = 30) -> str:
+    """Rasterize PDF pages and OCR with easyocr (scanned PDF fallback)."""
+    try:
+        import pdfplumber  # type: ignore
+
+        parts: list[str] = []
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            for page in pdf.pages[:max_pages]:
+                try:
+                    pil = page.to_image(resolution=180).original.convert("RGB")
+                    buf = io.BytesIO()
+                    pil.save(buf, format="PNG")
+                    t = _easyocr_text(buf.getvalue())
+                    if t.strip():
+                        parts.append(t.strip())
+                except Exception as exc:
+                    logger.debug("pdf page raster OCR skip: %s", exc)
+                    continue
+        return "\n\n".join(parts)
+    except Exception as exc:
+        logger.warning("pdf raster OCR failed: %s", exc)
+        return ""
 
 
 # ── Text file extractors ──────────────────────────────────────────────────────
@@ -165,7 +223,21 @@ async def extract_text_from_file(
     try:
         # ── PDF ──────────────────────────────────────────────────────────────
         if ext == ".pdf":
-            text = await asyncio.to_thread(_pdf_text, data)
+            min_chars_for_text = 80
+            used_sidecar_fallback = False
+            text = await _sidecar_pdf(data, filename) if quality == "accurate" else ""
+            if not text.strip():
+                text = await asyncio.to_thread(_pdf_text, data)
+            if quality == "fast" and len(text.strip()) < min_chars_for_text:
+                side = await _sidecar_pdf(data, filename)
+                if len(side.strip()) > len(text.strip()):
+                    text = side
+                    used_sidecar_fallback = True
+            if len(text.strip()) < min_chars_for_text:
+                raster = await asyncio.to_thread(_pdf_raster_easyocr, data)
+                if len(raster.strip()) > len(text.strip()):
+                    text = raster
+                    engine = "pdf-raster-easyocr+llama3.2"
             regex_codes = _parse_codes(text)
             llm_codes = await _llm_from_text(text)
             merged = []
@@ -175,7 +247,13 @@ async def extract_text_from_file(
                     seen.add(code)
                     merged.append(code)
             codes = merged
-            engine = "pdfplumber+llama3.2"
+            if engine == "none":
+                if quality == "accurate":
+                    engine = "pdf-accurate+llama3.2"
+                elif used_sidecar_fallback:
+                    engine = "pdfplumber+sidecar+llama3.2"
+                else:
+                    engine = "pdfplumber+llama3.2"
 
         # ── DOCX ─────────────────────────────────────────────────────────────
         elif ext == ".docx":
@@ -197,14 +275,26 @@ async def extract_text_from_file(
         # ── Image ─────────────────────────────────────────────────────────────
         else:
             # Run llava and easyocr in parallel to save time
-            llava_result, ocr_text = await asyncio.gather(
-                _llava(data),
-                asyncio.to_thread(_easyocr_text, data),
-                return_exceptions=True,
-            )
+            if quality == "accurate":
+                sidecar_text_task = _sidecar_handwriting(data, filename)
+                llava_result, sidecar_text, ocr_text = await asyncio.gather(
+                    _llava(data),
+                    sidecar_text_task,
+                    asyncio.to_thread(_easyocr_text, data),
+                    return_exceptions=True,
+                )
+            else:
+                llava_result, ocr_text = await asyncio.gather(
+                    _llava(data),
+                    asyncio.to_thread(_easyocr_text, data),
+                    return_exceptions=True,
+                )
+                sidecar_text = ""
 
             llava_codes: list[str] = llava_result if not isinstance(llava_result, Exception) else []
-            raw_text: str = ocr_text if not isinstance(ocr_text, Exception) else ""
+            easy_text: str = ocr_text if not isinstance(ocr_text, Exception) else ""
+            side_text: str = sidecar_text if not isinstance(sidecar_text, Exception) else ""
+            raw_text: str = side_text if len(side_text) > len(easy_text) else easy_text
 
             # Regex fallback keeps scan useful even if Ollama is unavailable.
             regex_codes = _parse_codes(raw_text)
@@ -226,6 +316,8 @@ async def extract_text_from_file(
                 parts.append(f"regex({len(regex_codes)})")
             if llm_codes:
                 parts.append(f"easyocr+llama3.2({len(llm_codes)})")
+            if side_text:
+                parts.append("sidecar")
             engine = " + ".join(parts) if parts else "none"
 
     except ValueError:

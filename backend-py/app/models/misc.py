@@ -73,19 +73,6 @@ class LlmCall(Base):
     created_at: Mapped[datetime] = mapped_column("createdAt", DateTime(timezone=True), server_default=func.now())
 
 
-class ExamAttempt(Base):
-    __tablename__ = "ExamAttempt"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
-    user_id: Mapped[str] = mapped_column("userId", String, ForeignKey("User.id", ondelete="CASCADE"))
-    topic_id: Mapped[str] = mapped_column("topicId", String)
-    questions: Mapped[dict] = mapped_column(JSON)
-    score: Mapped[float] = mapped_column(Float)
-    total_q: Mapped[int] = mapped_column("totalQ", Integer)
-    time_taken: Mapped[int] = mapped_column("timeTaken", Integer)
-    created_at: Mapped[datetime] = mapped_column("createdAt", DateTime(timezone=True), server_default=func.now())
-
-
 class RoutineScan(Base):
     __tablename__ = "RoutineScan"
 

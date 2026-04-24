@@ -1,75 +1,66 @@
 \chapter{Introduction}
 
-\section{Background}
-University students routinely juggle fragmented digital tools: a separate platform for course materials, another for the class schedule, a third for discussion, and a generic chatbot for study help. None of these tools know about one another, so continuity of learning is lost whenever a student switches context. Cognitive Copilot was designed to collapse this fragmentation into a single, coherent web application that understands courses, materials, and the student's measured mastery level simultaneously.
+\section{Introduction}
+A single tool is seldom enough for academic life today. Students balance course portals, separate channels for help, and improvised AI assistants that do not know which subject or reading they should follow. That everyday friction is what led us to build \textbf{Cognitive Copilot}: a web application where routine LMS work and AI-assisted study share the same accounts, the same course data, and the same expectations about roles and permissions.
 
-The system is also designed as a deliberate counterpoint to cloud-LLM-dependent tutors. By running all inference locally through the Ollama runtime, it is deployable on a university server or even a faculty laptop without recurring API subscription costs. Local-first operation also removes the data-privacy concerns that arise when student conversations are sent to external APIs.
+This chapter states the background and the problem we set out to solve, together with the objectives and scope, why the idea is not a direct copy of any single existing product, how we planned the work, and how we divided responsibilities between team members.
 
-\section{Problem Statement}
-Three concrete gaps motivate this work.
+\section{Background and Problem Statement}
+Academic workflows in many universities are still spread across several tools. Students often use one system for courses, another for communication, and separate platforms for AI support. That fragmentation means constant context switching and weak continuity between teaching materials and study support.
 
+\textbf{Cognitive Copilot} is built as one platform that combines LMS workflows and AI qssisted study. It is not meant to replace classroom teaching, but to offer a structured digital space where students and tutors interact around the same course information.
+
+The following practical problems motivated us:
 \begin{enumerate}[label=\arabic*.]
-\item \textbf{Grounding gap.} General-purpose LLM chat has no knowledge of a specific course's materials, so it cannot cite a passage from a lecture PDF or flag that an answer contradicts the textbook.
-\item \textbf{Pedagogy gap.} Most LLM wrappers use a single system prompt for all interactions. There is no strategy selection, no Socratic probing, and no distinction between a student who is confused and one who is ready for a worked example.
-\item \textbf{Measurability gap.} Without instrumentation, a supervisor cannot tell whether a tutoring system is helping students or generating confident nonsense. There is no retrieval recall, no faithfulness score, and no per-student mastery trajectory.
+\item Course resources, routine, and communication are not unified in a single workflow.
+\item AI chat tools are often detached from course materials, which leads to low context answers.
+\item Many systems offer partial features, but CRUD behavior, validation, and role based interactions are not always handled consistently.
+\item When the architecture is not modular, deployment and maintenance become difficult.
 \end{enumerate}
-
-Cognitive Copilot addresses all three gaps within a single deployable system.
 
 \section{Objectives}
+This work has the following aims:
 \begin{enumerate}[label=\arabic*.]
-\item Build a secure, role-aware full-stack LMS covering authentication, course-topic-material management, community discussion, and exam analytics.
-\item Implement a \textbf{production RAG pipeline} using \texttt{pgvector} for 768-dim dense retrieval and Postgres \texttt{tsvector} for BM25 sparse retrieval, fused via Reciprocal Rank Fusion, with streaming cited answers.
-\item Build a \textbf{Socratic agentic tutor} with five pedagogical strategies selected by a deterministic rule system, executed through a bounded ReAct loop with five callable tools.
-\item Replace the existing na\"{i}ve mastery heuristic with \textbf{Bayesian Beta-posterior tracking} per (student, topic), surfacing a 95\% credible interval in the quiz UI.
-\item Implement a \textbf{dual-mode OCR pipeline}: a fast Tesseract path for routine digitization and an accurate Python-sidecar path (TrOCR, Nougat) for handwriting and academic PDFs.
-\item Build an \textbf{LLM observability and evaluation harness}: per-call \texttt{LlmCall} audit table, Prometheus metrics endpoint, and an automated golden-dataset evaluator reporting recall@K, faithfulness, and OCR WER.
-\item Deliver \textbf{production packaging}: multi-stage Dockerfiles, Compose profiles for development and demo, and a GitHub Actions CI pipeline with lint, typecheck, tests, and eval smoke-test.
+\item Implement a role aware LMS with core modules: authentication, courses, routine, community, notifications, analytics, settings, and profile.
+\item Build an AI Tutor workspace merged with course and topic context and several study modes.
+\item Support practical material workflows such as upload and retrieval assisted question answering.
+\item Keep CRUD operations reliable across modules with clear request validation and authorization checks.
+\item Deliver a deployable full stack implementation suitable for local development and demonstration.
 \end{enumerate}
 
-\section{Significance of the Project}
-The significance lies in the combination. RAG, Socratic tutoring, Bayesian knowledge tracing, and agentic tool use are individually well-studied; what is unusual is implementing all four in a single, locally-deployable system with an automated evaluation harness that lets a supervisor verify the claims at viva time. The engineering approach --- modular route-controller-service layers, worker-based async pipelines, and structured LLM outputs --- also serves as a reference design for future capstone projects building on AI infrastructure.
-
-\section{Project Scope}
-The implemented system covers: user authentication and profiles; course, topic, material, and enrollment management; AI tutor with five modes (Chat, Ask Course, Explain, Quiz, Resource Discovery); routine scan via OCR; community discussion and announcements; attendance and marks tracking; real-time notifications via Socket.IO; analytics and the instructor evaluation dashboard; and a complete Docker deployment stack. Out of scope: mobile native clients, Bengali handwriting OCR, and multi-tenant isolation.
-
-\section{Novelty of the Work}
-The primary novelty is the integration of (a) grounded retrieval-augmented generation, (b) advanced handwriting and academic-PDF OCR, (c) a Socratic agent with deterministic strategy selection, (d) Bayesian mastery tracking, and (e) an automated evaluation harness --- all running offline without cloud LLM APIs. No open-source capstone project we are aware of combines all five in a single deployable codebase.
-
-\section{Project Planning}
-Implementation was carried out over four iterative phases corresponding to the plan outlined in the project proposal: infrastructure and RAG foundations, agent tutor and OCR sidecar, evaluation and design system, and user study and report. Figure~\ref{fig:gantt} presents the activity timeline.
-
-\begin{figure}[H]
-\centering
-\begin{tikzpicture}[x=1.05cm, y=0.82cm]
-  \draw[->] (0,0) -- (12.0,0) node[right] {Weeks};
-  \foreach \x in {1,...,11} {
-    \draw (\x,0.08) -- (\x,-0.08);
-    \node[below,font=\scriptsize] at (\x,-0.10) {\x};
-  }
-  \node[left,align=right,font=\small] at (0,2.1) {Requirements \&\\Architecture};
-  \node[left,align=right,font=\small] at (0,1.3) {RAG + Observ.};
-  \node[left,align=right,font=\small] at (0,0.6) {Agent + OCR};
-  \node[left,align=right,font=\small] at (0,-0.1) {Eval + Report};
-
-  \fill[blue!40]   (0.8,1.95) rectangle (2.8,2.25);
-  \fill[teal!45]   (2.5,1.15) rectangle (5.0,1.45);
-  \fill[orange!50] (4.6,0.45) rectangle (8.2,0.75);
-  \fill[purple!40] (7.8,-0.25) rectangle (11.0,0.05);
-\end{tikzpicture}
-\caption{Project Activity Timeline (four iterative phases over eleven weeks)}
-\label{fig:gantt}
-\end{figure}
-
-\section{Work Distribution}
+\section{Scope of the Project (Modern Tools and Boundaries)}
+The implemented scope includes:
 \begin{itemize}
-\item \textbf{Khadimul Islam Mahi (2107076):} Backend architecture, RAG pipeline (chunker, embedder, retriever), AI agent (strategy selector, ReAct loop, tools), OCR sidecar integration, LLM observability, BullMQ workers, evaluation harness, Docker and CI pipeline, LaTeX report.
-\item \textbf{Sumaiya Akter (2107080):} Frontend pages (AI tutor modes, analytics, landing, evaluation dashboard), design system primitives, dark mode, onboarding tour, TanStack Query data layer, Socket.IO notification hooks, UI integration testing.
-\item \textbf{Joint:} Database schema design, seed data, user study protocol, bug-fixing, and final system validation.
+\item User authentication, profile, and settings management.
+\item Course, topic, and material management.
+\item Routine and attendance related workflows.
+\item Community classrooms, threads, announcements, and member interactions.
+\item A notification feed with real time update handling.
+\item Analytics dashboards for students and tutors.
+\item AI Tutor modes for guided learning interactions.
 \end{itemize}
 
-\section{Applications}
-The system is applicable to university department-level deployments where faculty upload course materials and students interact with an AI tutor grounded in those materials. The OCR routine scanner addresses a concrete Bangladesh university need: paper timetables photographed and digitized into a structured weekly schedule. The evaluation dashboard gives supervisors an auditable view of tutoring quality without relying on anecdotes.
+Out of scope items for this report include native mobile clients and institution-wide multi-tenant deployment policies.
+
+The frontend is built with React, TypeScript, and Vite; TanStack Query and Zustand help with server state and UI state. The backend uses Python with FastAPI and Pydantic, and SQLAlchemy for asynchronous access to PostgreSQL. Redis supports caching and background jobs; workers handle longer tasks such as ingestion and OCR. Docker Compose containerizes the stack for a reproducible local environment. These choices reflect what is sustainable for a student project while still aligning with common industry practice.
+
+\section{Unfamiliarity of the Problem, Topic, and Solution}
+Neither an LMS nor an AI tutor is new by itself. What we set out to do differently is \emph{integration under one engineering story}: the same role model, the same course entities, and the same API discipline for both traditional LMS pages and the AI Tutor workspace. We did not mirror a single commercial product; we composed open patterns (REST APIs, modular services, retrieval assisted answering, local model hosting) into a system that fits our course requirements.
+
+Our contribution is best described as \textbf{software integration and dependable behavior}---clear contracts between modules, validated inputs, and tutor flows that stay tied to course and topic context---rather than claiming a new learning algorithm. Chapter~II discusses related work and situates this project among existing systems and research directions.
+
+\section{Project Planning and Work Distribution}
+We organized the work in overlapping phases: requirements and module boundaries, backend foundations (auth, schema, core CRUD), frontend pages aligned with those APIs, the AI Tutor and asynchronous ingestion, then integration, testing, and report writing. Where possible we used short iterations: implement a slice end to end, stabilize it, then move on.
+
+Both team members worked across frontend and backend; we split ownership mainly by module to limit conflicting edits and to keep reviews focused. One member led authentication, profile, settings, routine, and analytics-related paths; the other led courses and materials, community, notifications, and the AI Tutor UI and wiring. Shared tasks included database modeling decisions, Docker-based integration testing, diagram preparation, and final proofreading of the report. A formal Gantt chart is not included as a figure in this version, but the chapter order of the report follows the sequence we used in development.
 
 \section{Report Organization}
-Chapter~II reviews related works across RAG, document OCR, intelligent tutoring, and agent architectures. Chapter~III presents the full methodology including system architecture, RAG pipeline, OCR sidecar, ReAct agent, and Bayesian mastery model. Chapter~IV describes implementation, results, and the quantitative evaluation. Chapter~V discusses societal and ethical considerations. Chapter~VI maps the work to complex engineering problem criteria. Chapter~VII concludes with limitations and future work.
+The remainder of the report is organized as follows:
+\begin{itemize}
+\item Chapter~II describes applications of the work, how the repository is organized, related literature, and a short discussion of novelty.
+\item Chapter~III presents methodology: analysis, architecture, and modeling diagrams.
+\item Chapter~IV covers experimental setup, evaluation, implementation, results, and how objectives were met.
+\item Chapter~V addresses societal, ethical, legal, safety, and environmental considerations.
+\item Chapter~VI maps the project to complex engineering problems and activities.
+\item Chapter~VII concludes with summary, limitations, and future work.
+\end{itemize}

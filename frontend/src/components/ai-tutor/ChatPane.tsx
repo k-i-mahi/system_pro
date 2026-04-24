@@ -19,6 +19,7 @@ interface Props {
   topicId?: string;
   courseId?: string;
   systemPrimer?: string;
+  initialPrompt?: string;
   emptyStateTitle?: string;
   emptyStateHint?: string;
   quickActions?: { label: string; prompt: string }[];
@@ -29,6 +30,7 @@ export function ChatPane({
   topicId,
   courseId,
   systemPrimer,
+  initialPrompt,
   emptyStateTitle = 'How can I help you study?',
   emptyStateHint = 'Ask questions, request explanations, or get practice problems.',
   quickActions = [],
@@ -45,6 +47,13 @@ export function ChatPane({
   }, [messages]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!initialPrompt || messages.length > 0 || streaming) return;
+    void send(initialPrompt);
+    // Intentionally react only to initialPrompt changes; messages/streaming guard duplicate sends.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPrompt]);
 
   async function send(text?: string) {
     const prompt = (text ?? input).trim();

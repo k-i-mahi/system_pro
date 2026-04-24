@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.models.enums import DateFormat, Role, TimeFormat
+
+_STUDENT_EMAIL_RE = re.compile(r"^[a-z]+[0-9]+@stud\.kuet\.ac\.bd$")
+_TUTOR_EMAIL_RE = re.compile(r"^[a-z]+@[a-z]+\.kuet\.ac\.bd$")
+_KUET_EDU_EMAIL_RE = re.compile(r"^[a-z]+([0-9]+)?@([a-z]+\.kuet\.ac\.bd|stud\.kuet\.ac\.bd)$")
 
 # ── Requests ──────────────────────────────────────────────────────────────────
 
@@ -19,7 +23,7 @@ class RegisterRequest(BaseModel):
     def email_format(cls, v: str) -> str:
         email = v.strip()
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-            raise ValueError("Invalid email address")
+            raise ValueError("Only verified educational mail is allowed")
         return email.lower()
 
 
@@ -40,6 +44,8 @@ class RegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def password_strength(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Password cannot be empty")
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
         if not re.search(r"[A-Z]", v):
@@ -51,9 +57,18 @@ class RegisterRequest(BaseModel):
     @field_validator("role")
     @classmethod
     def role_allowed(cls, v: Role) -> Role:
-        if v not in (Role.STUDENT, Role.TUTOR):
-            raise ValueError("Role must be STUDENT or TUTOR")
+        if v not in (Role.STUDENT, Role.TUTOR, Role.ADMIN):
+            raise ValueError("Role must be STUDENT, TUTOR, or ADMIN")
         return v
+
+    @model_validator(mode="after")
+    def role_email_rules(self) -> "RegisterRequest":
+        email = (self.email or "").lower().strip()
+        if self.role == Role.STUDENT and not _STUDENT_EMAIL_RE.match(email):
+            raise ValueError("Only verified educational mail is allowed")
+        if self.role == Role.TUTOR and not _TUTOR_EMAIL_RE.match(email):
+            raise ValueError("Only verified educational mail is allowed")
+        return self
 
 
 class LoginRequest(BaseModel):
@@ -64,9 +79,16 @@ class LoginRequest(BaseModel):
     @classmethod
     def email_format(cls, v: str) -> str:
         email = v.strip()
-        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-            raise ValueError("Invalid email address")
+        if not _KUET_EDU_EMAIL_RE.match(email.lower()):
+            raise ValueError("Only verified educational mail is allowed")
         return email.lower()
+
+    @field_validator("password")
+    @classmethod
+    def password_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Password cannot be empty")
+        return v
 
 
 class RefreshRequest(BaseModel):

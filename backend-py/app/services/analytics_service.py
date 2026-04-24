@@ -11,7 +11,6 @@ from app.core.exceptions import NotFoundError
 from app.models.community import Community, CommunityMember
 from app.models.course import AttendanceRecord, Course, Enrollment, ScheduleSlot, Topic, TopicProgress
 from app.models.enums import CommunityRole, Role
-from app.models.misc import ExamAttempt
 from app.models.user import User
 
 
@@ -224,12 +223,6 @@ async def _course_analytics_student(db: AsyncSession, user_id: str, course_id: s
         .order_by(AttendanceRecord.date.asc())
     )).all()
 
-    exams = (await db.execute(
-        select(ExamAttempt)
-        .where(ExamAttempt.user_id == user_id, ExamAttempt.topic_id.in_(topic_ids))
-        .order_by(ExamAttempt.created_at.desc())
-    )).scalars().all() if topic_ids else []
-
     topic_analytics = []
     for t in topics:
         tp = progress_map.get(t.id)
@@ -272,17 +265,6 @@ async def _course_analytics_student(db: AsyncSession, user_id: str, course_id: s
         "topicAnalytics": topic_analytics,
         "attendanceData": attendance_data,
         "attendancePercentage": att_pct,
-        "examHistory": [
-            {
-                "id": e.id,
-                "topicId": e.topic_id,
-                "score": round((e.score / e.total_q) * 100) if e.total_q > 0 else 0,
-                "totalQ": e.total_q,
-                "timeTaken": e.time_taken,
-                "createdAt": e.created_at,
-            }
-            for e in exams
-        ],
     }
 
 
@@ -433,10 +415,10 @@ async def get_suggestions(db: AsyncSession, user_id: str) -> list:
             elif expertise < 0.6:
                 suggestions.append({
                     **base,
-                    "type": "exam",
+                    "type": "study",
                     "priority": "medium",
-                    "title": f"Take a quiz: {topic.title}",
-                    "description": f"Test yourself to boost mastery from {round(expertise * 100)}%",
+                    "title": f"Guided practice: {topic.title}",
+                    "description": f"Use AI guided practice to improve mastery from {round(expertise * 100)}%",
                 })
             elif last_studied:
                 days_since = (datetime.now(timezone.utc) - _as_utc(last_studied)).total_seconds() / 86400
@@ -451,3 +433,5 @@ async def get_suggestions(db: AsyncSession, user_id: str) -> list:
 
     suggestions.sort(key=lambda s: _prio[s["priority"]])
     return suggestions[:20]
+
+

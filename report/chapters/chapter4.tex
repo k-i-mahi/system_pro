@@ -1,235 +1,219 @@
-\chapter{Implementation, Results and Discussion}
+\chapter{Implementation, Results and Discussions}
 \label{ch:evaluation}
 
-\section{Implementation Summary}
-The implementation was carried out as a modular full-stack web application. The frontend was developed using React~19 and TypeScript with Vite~8. The backend was implemented with Express and TypeScript, Prisma ORM for schema modeling and migrations over PostgreSQL~15 with pgvector, Redis and BullMQ for asynchronous workers, and Ollama for local LLM responses. The AI sidecar uses Python~3.11, FastAPI, TrOCR, Nougat, and Unstructured \cite{react,express,prisma,postgres,redis,bullmq,ollama,tesseract,docker}.
+\section{Introduction}
+This chapter describes the concrete implementation, the environment we used to run and verify the system, the metrics and procedures we relied on instead of hand-wavy claims, and the qualitative evidence (screenshots and flows) that show the objectives from Chapter~I in action. Testing and validation material that used to stand alone is folded in here so the narrative matches the CSE~3200 template: setup, evaluation, results, and explicit mapping back to objectives.
 
-\begin{table}[H]
+\section{Experimental Setup}
+The project is implemented as a modular full-stack web application. The frontend is developed with React and TypeScript using Vite as the build tool. The backend uses FastAPI with a service-oriented structure and schema-based validation. PostgreSQL is the primary persistence layer, and Redis-backed asynchronous processing supports background operations and caching where configured.
+
+Local runs use Docker Compose so that database, cache, API, workers, and optional AI services start with consistent ports and environment variables. This setup is what we used while capturing screenshots and running automated tests for the report.
+
+\begin{table}[htbp]
 \centering
-\caption{Technology Stack Used in Implementation}
-\begin{tabular}{p{2.0in}p{4.0in}}
+\caption{Technology stack used in implementation.}
+\label{tab:tech-stack}
+\begin{tabular}{p{1.75in}p{3.85in}}
 \toprule
 \textbf{Layer} & \textbf{Technology} \\
 \midrule
-Frontend        & React 19, TypeScript, Vite 8, TanStack Query, Zustand, Recharts, Radix UI, motion/react \\
-Backend         & Node.js 20, Express, Zod validators, JWT (access + refresh), Socket.IO, Pino logs \\
-Database        & PostgreSQL 15 + pgvector 0.8.2, Prisma ORM, Redis 7 \\
-Async Layer     & BullMQ (ingest, OCR, notification, email workers) \\
-AI / ML         & Ollama \texttt{qwen2.5:7b-instruct} + \texttt{nomic-embed-text}, pgvector HNSW + BM25 \\
-OCR (sidecar)   & Python FastAPI, TrOCR (handwriting), Nougat (academic PDF), Unstructured (layout) \\
-Observability   & Pino JSON logs, prom-client \texttt{/metrics}, \texttt{LlmCall} audit table, LLM-as-judge harness \\
-DevOps          & Multi-stage Dockerfiles, Compose profiles (dev / ollama / prod-local / prod), GitHub Actions CI \\
+Frontend        & React, TypeScript, Vite, TanStack Query, Zustand \\
+Backend         & Python, FastAPI, Pydantic, JWT-based authentication \\
+Database        & PostgreSQL, SQLAlchemy async \\
+Queue / Async   & Redis with worker-based asynchronous tasks \\
+AI Integration  & Local model integration and retrieval-assisted tutor flows \\
+Deployment      & Docker Compose based local deployment \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\section{Module-Wise Implementation}
+\section{Evaluation Metrics}
+Rather than reporting unsupported benchmark scores for the language model, we evaluated the engineering outcome with criteria that match the objectives in Chapter~I:
+\begin{itemize}
+\item \textbf{Correctness and safety of APIs:} route-level tests where available, plus manual checks for authorization on sensitive mutations.
+\item \textbf{Coverage of core flows:} each bullet workflow in the list below can be exercised from the UI against a running stack.
+\item \textbf{Build reproducibility:} backend test suite passes and frontend production build completes without errors on the reference environment.
+\item \textbf{Interaction quality:} loading, empty, and error states behave sensibly on main pages; mutations show success or failure feedback.
+\end{itemize}
 
-\subsection{Authentication and Profile}
-JWT-based access (15 min TTL) and refresh token logic was implemented. Bcrypt password hashing is used server-side. Role-aware authorization middleware (\texttt{auth.ts}) guards all protected routes. The profile module includes avatar upload via Cloudinary, bio updates, and theme/date-format preferences.
+\section{Dataset}
+There is no single public ``course dataset'' bundled as a research corpus. Instead, the system is validated against \textbf{representative seeded or manually entered course data}: users, enrollments, topics, uploaded or pasted materials, routine slots, classroom threads, and notifications created during development. This is appropriate for a systems project: the scientific object is the platform behavior, not a fixed offline dataset. Where retrieval is enabled, chunks are derived from whatever materials tutors attach to topics in that environment.
 
-\subsection{Course and Topic Management}
-Course listing, topic CRUD, topic ordering, and material upload/link attachment are managed through dedicated controllers and Zod validators. An enrollment model tracks per-student course membership. Topic-level progress and exam attempt records feed the analytics and mastery dashboard.
+\section{Implementation and Results}
 
-\subsection{RAG Ask-Course Mode}
-The \texttt{POST /api/ai-tutor/ask-course} endpoint receives a question and optional course/topic filter. It runs BM25 (via \texttt{websearch\_to\_tsquery}) and cosine search in parallel, fuses with RRF ($K=60$), picks the top-8 chunks as context, and streams the generation with \texttt{event: token} SSE frames. A final \texttt{event: citations} frame delivers the fully resolved citation objects (materialId, title, page, snippet) so the frontend can render clickable \texttt{CitationChip} badges without a round-trip.
+\subsection{Module-wise implementation}
+Figure~\ref{fig:module-connectivity} summarizes how the implemented modules depend on one another at a high level. The narrative below follows the same order we used when walking a reviewer through the application.
 
-\subsection{Agentic Chat Tutor}
-The \texttt{POST /api/ai-tutor/chat} endpoint delegates to the ReAct loop (Section~\ref{sec:agent}). The strategy is selected deterministically before the first iteration. Every tool call and result is appended to the message context and logged to \texttt{LlmCall}. The SSE stream emits \texttt{event: strategy}, \texttt{event: thought}, \texttt{event: tool}, \texttt{event: token}, and \texttt{event: done} frames so the frontend can render a collapsible ``Tutor Thinking'' trace alongside the final answer.
-
-\subsection{Adaptive Quiz}
-\texttt{POST /api/ai-tutor/generate-quiz} uses Ollama's \texttt{format} parameter with a JSON schema for the five-question MCQ object, eliminating the regex parsing that caused 6--9 failures per 200 generations in the previous version. \texttt{POST /api/ai-tutor/submit-quiz} updates $(\alpha, \beta)$ on \texttt{TopicProgress} and returns the posterior mean and 95\% credible interval. Adaptive difficulty targets $d = \operatorname{clip}(\lceil 1 + 4\mu \rceil, 1, 5)$ on the next generation.
-
-\subsection{Resource Discovery Mode}
-\texttt{GET /api/ai-tutor/search-resources} queries Wikipedia's REST API, Stack Overflow search, Hacker News Algolia, and YouTube search simultaneously, classifies results by type (video / article / paper / blog), and returns a ranked list. The \texttt{ResourceSuggestPane} frontend component renders results with type icons and filter pills for All / Video / Article / Paper / Blog.
-
-\subsection{OCR Routine Pipeline}
-Routine scanning accepts timetable images, runs OCR extraction (fast or accurate path), parses probable course codes and time slots with a regex-based parser, and presents an editable draft to the user before bulk insertion. This prevents blind acceptance of noisy OCR output.
-
-\subsection{Real-Time Notifications}
-The notification service persists a row and emits \texttt{notification:new} and \texttt{notification:count} over Socket.IO (room \texttt{user:\$userId}) within the same synchronous call. The frontend \texttt{useNotificationSocket} hook subscribes and updates the TanStack Query cache instantly, so the bell badge reflects live state without polling.
-
-\subsection{Analytics Dashboard}
-\texttt{GET /api/analytics/overview} aggregates attendance, exam, and topic-progress data in a single response. \texttt{GET /api/analytics/evaluation} returns the instructor-facing LLM observability aggregate: p50/p95 latency per route, error counts, recent failures with drilldown, and per-topic Beta-posterior expertise curves.
-
-\section{API Implementation Snapshot}
-\begin{table}[H]
+\begin{figure}[htbp]
 \centering
-\caption{Selected Implemented API Endpoints}
-\begin{tabular}{p{1.5in}p{2.5in}p{2.0in}}
+\resizebox{0.98\textwidth}{!}{%
+\begin{tikzpicture}[
+    node distance=7mm and 8mm,
+    m/.style={draw, rounded corners, align=center, minimum width=2.6cm, minimum height=8mm, fill=kuetgray},
+    arr/.style={-{Stealth}, thick}
+]
+\node[m, fill=blue!10] (auth) {Auth + Profile};
+\node[m, right=of auth, fill=blue!10] (courses) {Courses + Topics};
+\node[m, right=of courses, fill=blue!10] (routine) {Routine + Attendance};
+\node[m, below=of auth, fill=green!10] (tutor) {AI Tutor};
+\node[m, below=of courses, fill=green!10] (community) {Community};
+\node[m, below=of routine, fill=green!10] (notif) {Notifications};
+\node[m, below=of community, fill=orange!12] (analytics) {Analytics};
+
+\draw[arr] (auth) -- (courses);
+\draw[arr] (courses) -- (routine);
+\draw[arr] (courses) -- (tutor);
+\draw[arr] (community) -- (notif);
+\draw[arr] (routine) -- (analytics);
+\draw[arr] (tutor) -- (analytics);
+\draw[arr] (community) -- (analytics);
+\end{tikzpicture}%
+}
+\caption{Project-core module connectivity in implementation.}
+\label{fig:module-connectivity}
+\end{figure}
+
+\textbf{Authentication and profile.} Authentication uses token-based session flows. Protected endpoints rely on backend dependencies to enforce authorized access. Profile functionality includes user information updates, avatar handling, and account-level operations.
+
+\textbf{Course and topic management.} Course management includes listing, detail views, enrollment-linked data, topic operations, and material actions. The backend and frontend are connected through dedicated route and service layers to keep CRUD behavior predictable.
+
+\textbf{AI Tutor workspace.} The AI Tutor is implemented as a multi-mode workspace: chat, explain, ask-with-course context, quiz, and resource-oriented flows. Mode switching, topic context, and state synchronization are coordinated in the frontend and corresponding API endpoints.
+
+\textbf{Routine and attendance.} Routine includes schedule slot management and calendar-style visualization in the UI. Attendance-related data feeds analytics and classroom views.
+
+\textbf{Community and classroom operations.} Community features include classrooms, threads, replies, announcements, and role-dependent views for attendance and marks where implemented.
+
+\textbf{Notifications.} Listing, unread counters, mark-read actions, and deep links into relevant pages are supported; the UI refreshes when new notifications arrive.
+
+\textbf{Analytics.} Dashboard-style pages summarize activity for students and tutors, drawing on attendance and related entities as designed in the schema.
+
+\subsection{Quantitative results}
+Automated checks give a compact picture of engineering health. Exact counts may drift as tests are added; at the time of writing, the intended standard is that \textbf{backend pytest runs complete successfully}, \textbf{frontend tests (Vitest) complete successfully}, and \textbf{\texttt{npm run build}} produces a production bundle without errors. Table~\ref{tab:quant-summary} states the qualitative level we report here rather than a frozen number, to avoid stale metrics in a living repository.
+
+\begin{table}[htbp]
+\centering
+\caption{Quantitative validation summary (reporting level, not a frozen benchmark).}
+\label{tab:quant-summary}
+\begin{tabular}{p{2.0in}p{3.65in}}
+\toprule
+\textbf{Signal} & \textbf{What ``passing'' means for this project} \\
+\midrule
+Backend tests & Core routes, auth, and services covered by \texttt{pytest} exit code zero on CI or local run. \\
+Frontend tests & Selected page and component tests exit zero. \\
+Production build & Typecheck and Vite build succeed. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Qualitative results}
+The screenshots in Figures~\ref{fig:shot-landing}--\ref{fig:shot-notify} illustrate the main user-facing surfaces: landing and auth, routine planning, AI Tutor workspace, analytics, community, and notifications. Together they show that the modules named in Chapter~I are not paper features; they appear as navigable pages backed by the API surface summarized in Table~\ref{tab:api-snapshot}.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{assets/screenshots/landing.png}
+\caption{Landing page.}
+\label{fig:shot-landing}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{assets/screenshots/login.png}
+\caption{Login interface.}
+\label{fig:shot-login}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{assets/screenshots/routine.png}
+\caption{Routine page and slot visualization.}
+\label{fig:shot-routine}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{assets/screenshots/ai_tutor.png}
+\caption{AI Tutor workspace.}
+\label{fig:shot-tutor}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{assets/screenshots/analytics.png}
+\caption{Analytics dashboard.}
+\label{fig:shot-analytics}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{assets/screenshots/community.png}
+\caption{Community and classroom flow.}
+\label{fig:shot-community}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{assets/screenshots/notifications.png}
+\caption{Notification center with deep links.}
+\label{fig:shot-notify}
+\end{figure}
+
+\begin{table}[htbp]
+\centering
+\caption{Selected implemented API endpoints (illustrative snapshot).}
+\label{tab:api-snapshot}
+\begin{tabular}{p{1.15in}p{2.35in}p{1.95in}}
 \toprule
 \textbf{Module} & \textbf{Endpoint} & \textbf{Purpose} \\
 \midrule
-Auth          & POST /api/auth/login            & JWT access + refresh token issue \\
-Auth          & POST /api/auth/refresh          & Rotate refresh token \\
-AI Tutor      & POST /api/ai-tutor/chat         & Agentic streaming response (SSE) \\
-AI Tutor      & POST /api/ai-tutor/ask-course   & RAG grounded answer + citations (SSE) \\
-AI Tutor      & POST /api/ai-tutor/generate-quiz& Structured JSON quiz (JSON schema) \\
-AI Tutor      & POST /api/ai-tutor/submit-quiz  & Score + Beta posterior + CI \\
-AI Tutor      & GET  /api/ai-tutor/search-resources & Internet resource discovery \\
-Materials     & GET  /api/materials/:id         & Material metadata for citation preview \\
-Routine       & POST /api/routine/scan          & OCR-based routine extraction \\
-Analytics     & GET  /api/analytics/evaluation  & LLM observability aggregate \\
-Metrics       & GET  /metrics                   & Prometheus scrape (key-gated) \\
-Notifications & GET  /api/notifications         & Notification feed \\
+Auth          & /api/auth/*                     & Authentication and account flows \\
+Courses       & /api/courses/*                  & Course, topic, and material operations \\
+Routine       & /api/routine/*                  & Routine and slot-related operations \\
+AI Tutor      & /api/ai-tutor/*                 & Multi-mode tutor interactions \\
+Community     & /api/community/*                & Classroom, thread, and announcement flows \\
+Notifications & /api/notifications/*            & Notification and response actions \\
+Analytics     & /api/analytics/*                & Overview and course analytics \\
+Profile       & /api/profile/*                  & Profile and account management \\
+Settings      & /api/settings/*                 & User preferences and settings \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\section{Input and Output Specification}
-\begin{table}[H]
-\centering
-\caption{Sample Input and Output Across Core Modules}
-\begin{tabular}{p{1.6in}p{2.3in}p{2.1in}}
-\toprule
-\textbf{Module} & \textbf{Input} & \textbf{Output} \\
-\midrule
-Authentication   & Email, password                         & Access token, refresh token, user profile \\
-RAG Ask-Course   & Question, courseId, optional topicId    & SSE token stream + citations frame \\
-Quiz Generation  & topicId, difficulty (optional)          & 5-question MCQ JSON (zero parse failures) \\
-Quiz Submission  & answers[], questionIds[]                & Score, $\mu$, 95\% CI, difficulty hint \\
-Routine Scan     & Timetable image (JPEG/PNG/PDF)          & Extracted text, parsed slots draft \\
-Resource Search  & query string, optional type filter      & Ranked list: title, URL, snippet, type \\
-\bottomrule
-\end{tabular}
-\end{table}
+\subsection{Analysis of the results}
+The implementation shows that a student team can deliver a \textbf{broad but coherent} LMS plus AI surface in one codebase when scope is controlled and integration is treated as a first-class requirement. The limiting factor is not drawing diagrams, but keeping authorization and validation aligned everywhere; that is why our evaluation narrative emphasizes tests and runnable deployment over model accuracy numbers we cannot fairly claim.
 
-\section{User Interface}
-The frontend design system uses Radix UI primitives styled with Tailwind v4 CSS variables and a full dark-mode toggle. Key UI pages are described below.
-
-\screenshotplaceholder{Landing Page — Feature Grid and Technology Badge Cloud}
-\screenshotplaceholder{Login and Registration Interface (dark mode)}
-\screenshotplaceholder{Course Listing and Topic Progress View}
-\screenshotplaceholder{AI Tutor — Chat Mode with Strategy Badge and Thinking Trace}
-\screenshotplaceholder{AI Tutor — Ask Course Mode with Citation Chips and Material Preview Panel}
-\screenshotplaceholder{AI Tutor — Quiz Mode with Animated Progress Ring and Beta Posterior Display}
-\screenshotplaceholder{AI Tutor — Resource Discovery Mode with Type Filter Pills}
-\screenshotplaceholder{Instructor Evaluation Dashboard (p95 latency, faithfulness, expertise curves)}
-\screenshotplaceholder{Analytics and Overview Dashboard (attendance, exam trends)}
-\screenshotplaceholder{Real-Time Notification Center}
-\screenshotplaceholder{OCR Routine Scan — Editable Draft Before Confirmation}
-
-\section{Performance and Functional Outcomes}
-\begin{table}[H]
-\centering
-\caption{Observed Functional Outcomes During Validation Runs}
-\begin{tabular}{p{3.0in}p{3.0in}}
-\toprule
-\textbf{Validation Scenario} & \textbf{Outcome} \\
-\midrule
-Authentication (login-refresh-logout)            & Token issued, rotated, and invalidated correctly \\
-RAG Ask-Course with uploaded PDF                 & Citations correct in 38/40 golden Q\&A pairs \\
-AI chat streaming response                       & Stable incremental SSE rendering, no dropped chunks \\
-200 consecutive quiz generations                 & Zero JSON parse failures (vs.\ 6--9 previous) \\
-Routine OCR upload                               & Editable draft presented before slot creation \\
-Notification push on announcement                & Socket event received within $<$100\,ms \\
-Material ingest (5-page PDF)                     & Worker completes in $\sim$12\,s cold; status updated to DONE \\
-Dark mode toggle                                 & All pages switch without layout shift or FOUC \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\section{Grounded Retrieval-Augmented Q\&A}
-\label{sec:rag-impl}
-The RAG implementation (Section~\ref{sec:rag}) is the largest new deliverable. Four engineering decisions were load-bearing.
-
+\textbf{Core flows exercised during validation.} The following project-core flows were checked repeatedly while preparing the demonstration:
 \begin{enumerate}[label=\arabic*.]
-    \item \textbf{Shared persistence.} Embeddings live in a \texttt{vector(768)} column on the same Postgres instance that stores user data, avoiding a second database service for capstone-scale workloads.
-    \item \textbf{Pagination-aware chunker.} The greedy packer targets 800 tokens with 150-token overlap and never crosses PDF page boundaries, which preserves page-number provenance for citations.
-    \item \textbf{Hybrid fusion.} RRF with $K=60$ fuses sparse and dense rankings without requiring calibrated scores --- a practical win because cosine distance and \texttt{ts\_rank\_cd} are not directly comparable.
-    \item \textbf{Streaming citations.} SSE emits tokens from the generator and a final \texttt{event: citations} frame. The frontend \texttt{renderWithCitations} helper splices them into \texttt{[$n$]} tokens without re-rendering the text buffer, making citations feel instant.
+	\item Secure access (login, protected routes).
+	\item Course, topic, and material interactions.
+	\item Routine and attendance interactions.
+	\item AI Tutor modes with topic context.
+	\item Community classroom, thread, and announcement flows.
+	\item Notification list, unread state, and actions.
+	\item Analytics page load for student and tutor perspectives.
+	\item Settings and profile updates.
 \end{enumerate}
 
-\section{Agentic Tool Use and Socratic Strategies}
-The chat controller delegates to the ReAct loop. Five strategies are implemented as prompt templates; a deterministic regex-based selector picks the strategy before generation starts, with a Socratic downgrade applied when the Beta-posterior mean falls below $0.4$. Every strategy transition, tool call, and tool result is logged to \texttt{LlmCall} with a shared \texttt{parentCallId}, which is how the evaluation dashboard reconstructs an agent trace.
+\textbf{CRUD and permission mindset.} For each core entity we paid attention to create and update validation, consistent list and detail responses, delete behavior where exposed, and role boundaries on sensitive operations.
 
-Structured quiz output is produced through Ollama's JSON-schema-constrained \texttt{format} parameter rather than post-hoc regex parsing. Across 200 consecutive generations during stability testing, zero parse failures were observed, down from an average of 6--9 failures per 200 with the previous regex approach.
+\section{Objectives Achieved}
+Table~\ref{tab:objectives-map} links the objectives from Chapter~I to evidence in this chapter and in Chapter~III.
 
-\section{Advanced OCR}
-The backend's \texttt{extractTextFromFile} function accepts a \texttt{quality} parameter. The fast path preserves the original Tesseract and \texttt{pdf-parse} behaviour. The accurate path calls the Python FastAPI sidecar (TrOCR for handwriting, Nougat for academic PDFs with embedded mathematics, Unstructured for layout-heavy documents) via \texttt{undici} with FormData. All accurate-path calls flow through a dedicated BullMQ worker so slow inferences never block HTTP handlers.
-
-Availability-first default: if the sidecar returns non-200 or the underlying model fails to load, the backend falls back to the fast path and surfaces an ``AI-transcribed --- please verify'' banner in the UI.
-
-\section{Bayesian Mastery Tracking}
-The conjugate Beta update described in Section~\ref{sec:mastery} replaces the previous $+0.1/-0.05$ heuristic. The hyperparameters $\alpha$ and $\beta$ are persisted on \texttt{TopicProgress}. After every quiz submission, the backend computes the posterior mean and 95\% credible interval and returns both to the client so the student can see their uncertainty explicitly. Adaptive difficulty uses the posterior mean to target the next quiz difficulty level.
-
-\section{LLM Observability}
-All Ollama callers flow through a \texttt{withLogging(route, fn)} higher-order function. Each call inserts a row into the \texttt{LlmCall} table capturing: route, model, latency, prompt and completion token counts, status (\texttt{OK}/\texttt{ERROR}/\texttt{TIMEOUT}), truncated error message, and \texttt{parentCallId} for agent trace reconstruction. Prometheus metrics are published at \texttt{/metrics} behind an \texttt{X-Metrics-Key} header: per-route latency histograms, token counters, and error rate gauges.
-
-\section{Quantitative Evaluation}
-\label{sec:eval}
-The evaluation harness (\texttt{backend/src/eval/}) runs on a curated golden set of forty retrieval-augmented question-answer pairs spanning algorithms, distributed systems, machine learning, and operating systems. Metrics are computed by a three-times majority-vote LLM judge (faithfulness, context precision, answer relevance), a deterministic recall@K computation, and token-level WER/CER for OCR through the \texttt{jiwer} package.
-
-Table~\ref{tab:rag-metrics} reports the headline numbers under the \texttt{qwen2.5:7b-instruct} + \texttt{nomic-embed-text} configuration.
-
-\begin{table}[H]
+\begin{table}[htbp]
 \centering
-\caption{RAG quality and latency against the 40-question golden dataset.}
-\label{tab:rag-metrics}
-\begin{tabular}{lcc}
+\caption{Mapping of project objectives to outcomes.}
+\label{tab:objectives-map}
+\begin{tabular}{@{}p{0.38in}p{2.35in}p{2.75in}@{}}
 \toprule
-\textbf{Metric} & \textbf{Value} & \textbf{Target} \\
+\textbf{\#} & \textbf{Objective (short)} & \textbf{How it was achieved} \\
 \midrule
-Recall@5                         & 0.83  & $\geq 0.80$ \\
-Recall@8                         & 0.88  & ---         \\
-Faithfulness (majority of 3)     & 0.79  & $\geq 0.75$ \\
-Context precision                & 0.71  & ---         \\
-Answer keyword overlap           & 0.64  & ---         \\
-Cold answer latency (p50)        & 6.4\,s & ---        \\
-Cold answer latency (p95)        & 14.8\,s & ---       \\
-Warm answer latency (p50)        & 3.1\,s & ---        \\
+1 & Role-aware LMS modules & Pages and APIs for auth, courses, routine, community, notifications, analytics, settings, profile; role-aware UI. \\
+2 & AI Tutor with context & Workspace modes; context from course and topic entities; retrieval over materials where configured. \\
+3 & Material workflows & Upload and ingestion with async workers for heavier steps. \\
+4 & Reliable CRUD & Pydantic validation, service rules, tests on critical routes. \\
+5 & Deployable stack & Docker Compose and documented environment for local full-stack runs. \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Table~\ref{tab:ocr-metrics} reports OCR character and word error rates on a ten-sample golden set (five handwritten pages, five academic PDF pages with embedded equations).
-
-\begin{table}[H]
-\centering
-\caption{OCR CER and WER on the 10-sample golden OCR set (lower is better).}
-\label{tab:ocr-metrics}
-\begin{tabular}{lcccc}
-\toprule
-          & \multicolumn{2}{c}{Fast path (Tesseract / pdf-parse)} & \multicolumn{2}{c}{Accurate path (TrOCR / Nougat)} \\
-\cmidrule(lr){2-3}\cmidrule(lr){4-5}
-Sample set & CER & WER & CER & WER \\
-\midrule
-Handwritten (5 pages)   & 0.71 & 0.83 & 0.19 & 0.27 \\
-Academic PDF (5 pages)  & 0.28 & 0.41 & 0.07 & 0.12 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{table}[H]
-\centering
-\caption{Agent and Quiz Stability Metrics}
-\label{tab:stability}
-\begin{tabular}{lcc}
-\toprule
-\textbf{Metric} & \textbf{Before upgrade} & \textbf{After upgrade} \\
-\midrule
-Quiz JSON parse failure rate (per 200) & 6--9 & 0 \\
-Strategy visible to student            & No   & Yes (badge in UI) \\
-Mastery display                        & $0.0$--$1.0$ scalar & $\mu$ + 95\% CI \\
-LLM calls logged                       & 0    & 100\% (via \texttt{withLogging}) \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\section{Preliminary User Study}
-A within-subjects pre/post study was conducted with volunteer KUET CSE undergraduates over a two-week window following the protocol in \texttt{study/protocol.md}. Participants completed a ten-item pre-test on two topics, used the tutor freely for one week, then took a parallel ten-item post-test plus a System Usability Scale (SUS) \cite{brooke1996sus,bangor2008sus} survey and a one-item net promoter question.
-
-The paired t-test on quiz accuracy and the SUS summary are produced by \texttt{scripts/analyze\_study.py}. Effect size is reported as Cohen's $d$ on the differences. The fallback posture if recruitment yields fewer than six participants is documented in the protocol: preliminary self-case-study with the quantitative RAG and OCR metrics carrying the evaluative load. Full numerical tables and the pre/post boxplot are included in the award-submission packet when the study window closes.
-
-\section{Discussion}
-The upgraded implementation turns the previous generic LMS-plus-chat into a grounded, measurable, agent-driven tutor. Four outcomes stand out.
-
-\textbf{Architecture resilience.} The route-controller-service separation inherited from the earlier iteration proved resilient: every new feature (RAG, sidecar OCR, evaluation harness, resource discovery) slots in behind an existing controller boundary without cross-cutting leaks.
-
-\textbf{Sidecar isolation.} Moving all heavy Python ML into a FastAPI sidecar kept the backend Docker image small ($<$200\,MB) and the cold-start time predictable. The fallback path means a sidecar crash does not break OCR entirely.
-
-\textbf{Zero-friction instrumentation.} The \texttt{withLogging} wrapper instrumented every LLM call without touching any caller's surface API. The evaluation dashboard, Prometheus endpoint, and \texttt{LlmCall} table all come for free.
-
-\textbf{Interpretable mastery.} Adopting conjugate Bayesian updates turned what was previously an opaque heuristic into a statement a student can read: ``your mastery is 62\%, 95\% CI 47--76\%.'' The strategy badge gives a second interpretability layer: the student can see that the tutor chose Socratic probing because their posterior mean was below 0.4.
-
-The main residual risks are the structured-output reliability of Qwen2.5~7B on edge cases (mitigated with a 200-generation regression test), CPU-only Nougat latency on live demos (mitigated by pre-computing a demo sample cache), and the study recruitment risk (mitigated by an honest n=6 reporting fallback).
+\section{Conclusion}
+Taken together, the setup, metrics, screenshots, and objective mapping show a \textbf{working integrated system} rather than a disconnected set of demos. The most important lesson for us as developers is that AI features only feel trustworthy when ordinary LMS operations remain correct and fast. That balance---exciting tutor capabilities on top of boring, solid CRUD---is the result we want to highlight.

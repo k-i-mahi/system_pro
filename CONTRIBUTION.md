@@ -144,7 +144,7 @@ LLM generates quiz → Student answers → System scores →
 This creates a **continuous competency metric** (0.0 to 1.0) per student per topic, enabling:
 - Personalized study recommendations
 - Visual expertise heatmaps in analytics
-- Data-driven academic intervention triggers
+- Data-driven academic support triggers
 
 ### 3.3 OCR-Driven Schedule Digitization
 

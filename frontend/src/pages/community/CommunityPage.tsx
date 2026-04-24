@@ -11,7 +11,7 @@ type MainTab = 'threads' | 'classrooms';
 
 export default function CommunityPage() {
   const queryClient = useQueryClient();
-  const [mainTab, setMainTab] = useState<MainTab>('threads');
+  const [mainTab, setMainTab] = useState<MainTab>('classrooms');
   const [tab, setTab] = useState<'all' | 'my-courses'>('all');
   const [showNew, setShowNew] = useState(false);
   const [selectedThread, setSelectedThread] = useState<string | null>(null);
@@ -91,7 +91,7 @@ export default function CommunityPage() {
                   {threadDetail.course.courseCode}
                 </span>
               )}
-              <p className="mt-3 text-text-primary">{threadDetail.body}</p>
+              <p className="mt-3 whitespace-pre-wrap text-text-primary">{threadDetail.body}</p>
               <div className="flex items-center gap-4 mt-3">
                 <button
                   onClick={() => likeMutation.mutate(threadDetail.id)}
@@ -138,17 +138,16 @@ export default function CommunityPage() {
               e.preventDefault();
               if (replyContent.trim()) replyMutation.mutate(replyContent);
             }}
-            className="flex gap-3"
+            className="space-y-3"
           >
-            <input
-              type="text"
-              className="input flex-1"
-              placeholder="Write a reply..."
+            <textarea
+              className="input min-h-[90px] py-2"
+              placeholder="Write your reply..."
               value={replyContent}
               onChange={(e) => setReplyContent(e.target.value)}
             />
-            <button type="submit" className="btn-primary" disabled={!replyContent.trim()}>
-              Reply
+            <button type="submit" className="btn-primary" disabled={!replyContent.trim() || replyMutation.isPending}>
+              {replyMutation.isPending ? 'Posting...' : 'Reply'}
             </button>
           </form>
         </div>
@@ -167,7 +166,7 @@ export default function CommunityPage() {
               className="btn-primary flex items-center gap-2"
             >
               {showNew ? <X size={18} /> : <Plus size={18} />}
-              {showNew ? 'Cancel' : 'New Thread'}
+              {showNew ? 'Cancel' : 'Start Thread'}
             </button>
           )}
         </div>
@@ -176,20 +175,20 @@ export default function CommunityPage() {
       {/* Main Tabs */}
       <div className="flex gap-2 mb-4 border-b border-border pb-3">
         <button
-          onClick={() => setMainTab('threads')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-            mainTab === 'threads' ? 'bg-primary text-white' : 'text-text-secondary hover:bg-bg-main'
-          }`}
-        >
-          <MessageSquare size={16} /> Threads
-        </button>
-        <button
           onClick={() => setMainTab('classrooms')}
           className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
             mainTab === 'classrooms' ? 'bg-primary text-white' : 'text-text-secondary hover:bg-bg-main'
           }`}
         >
           <School size={16} /> Classrooms
+        </button>
+        <button
+          onClick={() => setMainTab('threads')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            mainTab === 'threads' ? 'bg-primary text-white' : 'text-text-secondary hover:bg-bg-main'
+          }`}
+        >
+          <MessageSquare size={16} /> Threads
         </button>
       </div>
 
@@ -216,17 +215,20 @@ export default function CommunityPage() {
       {/* New thread form */}
       {showNew && (
         <div className="card mb-4">
+          <p className="text-sm text-text-secondary mb-3">
+            Start a focused discussion. Keep title short, put details in the post body.
+          </p>
           <div className="space-y-3">
             <input
               type="text"
               className="input"
-              placeholder="Thread title..."
+              placeholder="Thread title"
               value={newThread.title}
               onChange={(e) => setNewThread((p) => ({ ...p, title: e.target.value }))}
             />
             <textarea
-              className="input h-24 py-2"
-              placeholder="What's on your mind?"
+              className="input min-h-[110px] py-2"
+              placeholder="Share context, question, and what you've tried..."
               value={newThread.body}
               onChange={(e) => setNewThread((p) => ({ ...p, body: e.target.value }))}
             />
@@ -240,9 +242,9 @@ export default function CommunityPage() {
             <button
               onClick={() => createMutation.mutate()}
               className="btn-primary"
-              disabled={!newThread.title || !newThread.body}
+              disabled={!newThread.title || !newThread.body || createMutation.isPending}
             >
-              Post Thread
+              {createMutation.isPending ? 'Posting...' : 'Post Thread'}
             </button>
           </div>
         </div>

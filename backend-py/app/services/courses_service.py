@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.models.course import Course, Enrollment, Material, ScheduleSlot, Topic, TopicProgress
-from app.models.enums import IngestStatus, MaterialType, OcrQuality, TopicStatus
+from app.models.enums import IngestStatus, MaterialType, OcrQuality, Role, TopicStatus
+from app.models.user import User
 from app.schemas.courses import (
     AddMaterialLinkRequest,
     CoursesQuery,
@@ -17,6 +19,7 @@ from app.schemas.courses import (
     UpdateTopicRequest,
 )
 from app.services import cloudinary_service
+from app.services.ingest_service import ingest_material_with_new_session
 from app.workers.queues import enqueue_ingest
 
 logger = logging.getLogger(__name__)
@@ -63,6 +66,7 @@ def _material_to_dict(m: Material) -> dict:
         "uploadedAt": m.uploaded_at.isoformat(),
         "hasEmbeddings": m.has_embeddings,
         "ingestStatus": m.ingest_status,
+        "ingestError": (m.ingest_error[:200] + "…") if m.ingest_error and len(m.ingest_error) > 200 else m.ingest_error,
         "chunkCount": m.chunk_count,
         "ocrQuality": m.ocr_quality,
     }
@@ -333,8 +337,10 @@ async def upload_material(
     if mat_type != MaterialType.LINK:
         try:
             await enqueue_ingest(material.id, user_id, quality or "fast")
-        except Exception:
-            logger.warning("Failed to enqueue ingest for material %s", material.id)
+        except Exception as exc:
+            # Fallback to local async ingest so uploaded real files still become searchable.
+            logger.warning("Queue enqueue failed for %s, using local fallback: %s", material.id, exc)
+            asyncio.create_task(ingest_material_with_new_session(material.id, user_id, quality or "fast"))
 
     return _material_to_dict(material)
 
@@ -366,3 +372,48 @@ async def delete_material(db: AsyncSession, material_id: str) -> None:
 
     await db.delete(material)
     await db.commit()
+
+
+async def reingest_material(
+    db: AsyncSession,
+    course_id: str,
+    topic_id: str,
+    material_id: str,
+    user_id: str,
+) -> dict:
+    user = await db.get(User, user_id)
+    if not user or user.role not in (Role.TUTOR, Role.ADMIN, Role.MENTOR):
+        raise ForbiddenError("Only tutors or administrators can re-run material indexing")
+
+    topic = await db.get(Topic, topic_id)
+    if not topic or topic.course_id != course_id:
+        raise NotFoundError("Topic not found")
+
+    material = await db.get(Material, material_id)
+    if not material or material.topic_id != topic_id:
+        raise NotFoundError("Material not found")
+
+    if material.file_type == MaterialType.LINK:
+        raise ValidationError("Link materials cannot be re-indexed")
+
+    await db.execute(
+        update(Material)
+        .where(Material.id == material_id)
+        .values(
+            ingest_status=IngestStatus.PENDING,
+            ingest_error=None,
+            has_embeddings=False,
+            chunk_count=0,
+        )
+    )
+    await db.commit()
+    await db.refresh(material)
+
+    quality = "accurate" if material.ocr_quality == OcrQuality.ACCURATE else "fast"
+    try:
+        await enqueue_ingest(material_id, user_id, quality)
+    except Exception as exc:
+        logger.warning("Queue enqueue failed for reingest %s, using local fallback: %s", material_id, exc)
+        asyncio.create_task(ingest_material_with_new_session(material_id, user_id, quality))
+
+    return _material_to_dict(material)

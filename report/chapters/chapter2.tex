@@ -1,63 +1,62 @@
-\chapter{Related Works}
+\chapter{Applications of the Work, Organization of the Project, and Related Works}
 
-The Cognitive Copilot project sits at the intersection of four distinct research communities: retrieval-augmented generation (RAG), document and handwriting OCR, intelligent tutoring systems (ITS), and agentic large-language-model (LLM) design. This chapter situates our system against each of these, identifies concrete gaps, and shows how the design decisions in Chapter~\ref{ch:design} follow directly from that positioning.
+\section{Applications of the Work}
+Cognitive Copilot is intended for \textbf{department-level academic use}: students can follow courses and topics, track routine and attendance, join classroom threads, receive notifications, and use the AI Tutor with material that belongs to the course. Tutors can manage class communication, review engagement through analytics, and guide students without sending them to a separate ``magic chat'' that lacks context.
 
-\section{Digital Learning Management Systems}
-General-purpose LMS platforms such as Moodle, Google Classroom, and Canvas remain the dominant choice for university course management. These systems excel at assignment flow, enrolment, and grading, but their AI capability is either absent or bolted on through premium cloud add-ons \cite{react,express,postgres}. Few offer local tutor integration, and none expose the retrieval primitives needed to ground an answer in specific course material. Cognitive Copilot deliberately narrows the feature surface compared to a full LMS and instead invests the engineering budget in pedagogy, grounding, and observability.
+The same design could be extended later toward stronger institutional deployment (identity federation, policy engines, richer grading exports). For this project, the emphasis is on a coherent demonstration system that behaves predictably for the stakeholders we modeled: students, tutors, and limited administrative control.
 
-\section{Retrieval-Augmented Generation for Education}
-Lewis et al.~\cite{lewis2020rag} introduced RAG as a way to fuse a non-parametric retrieval module with a parametric sequence-to-sequence generator, showing that generation quality on knowledge-intensive tasks improves substantially when the model can attend over a retrieved passage set. The survey by Gao et al.~\cite{gao2023ragsurvey} consolidates the current design space: chunk-level retrieval, hybrid sparse/dense scoring, reranking, and increasingly compositional retrieval pipelines.
+\section{Organization of the Project}
+The repository is organized in a \textbf{monorepo-style} layout with a clear split between user interface, API, and infrastructure:
+\begin{itemize}
+\item \texttt{frontend/} --- React application, pages per module (courses, community, AI Tutor, analytics, and so on), shared libraries for API access and onboarding.
+\item \texttt{backend-py/} --- FastAPI application structured into routers, services, schemas, and workers; PostgreSQL models and migrations live alongside the API code.
+\item \texttt{docker-compose.yml} and related configuration --- bring up database, cache, API, workers, and optional AI runtime for end-to-end runs.
+\item \texttt{report/} --- \LaTeX{} sources, figures, screenshots, and bibliography for this document.
+\end{itemize}
 
-For the education domain in particular, RAG enables two properties that free-form LLMs cannot provide: (i)~answers traceable to a cited source, and (ii)~reduced hallucination because the generator is constrained by the retrieved evidence. Cognitive Copilot builds on four specific pieces of this literature:
+This layout matches how we worked day to day: feature slices usually touched one router and its service on the backend, plus one or two pages on the frontend, with Docker used to validate integration.
 
-\begin{enumerate}[label=\arabic*.]
-    \item \textbf{Dense retrieval} via dual-encoder embeddings \cite{karpukhin2020dpr}. We use \texttt{nomic-embed-text} \cite{nomic}, a 768-dimensional open-weights model chosen for its strong MTEB scores at a CPU-friendly size.
-    \item \textbf{Sparse retrieval} via BM25 \cite{robertson2009bm25}, implemented over Postgres \texttt{tsvector} columns so we avoid introducing a separate search service.
-    \item \textbf{Hybrid fusion} via Reciprocal Rank Fusion \cite{cormack2009rrf}, which combines dense and sparse rankings without requiring score calibration.
-    \item \textbf{Vector storage} via \texttt{pgvector} \cite{pgvector} with HNSW indexing \cite{malkov2018hnsw}, keeping our persistence stack to a single database rather than a dedicated vector store.
-\end{enumerate}
+\section{Related Works}
 
-\section{Handwriting and Document OCR}
-Tesseract remains a capable engine for printed text \cite{tesseract}, but performs poorly on handwritten and mathematical content. Two recent transformer-based models substantially change the landscape. Li et al.~\cite{li2023trocr} introduced TrOCR, which combines an image transformer encoder with a text decoder and reaches production-quality recognition on handwritten text in Latin scripts. Blecher et al.~\cite{blecher2023nougat} introduced Nougat, which extends this idea to scientific PDFs, producing markdown with embedded LaTeX directly from raster page images. The Unstructured toolkit \cite{unstructured} complements both by providing layout-aware segmentation for complex PDFs.
+\subsection{Learning Management Platforms}
+Conventional LMS platforms focus on course administration, assignment flow, and grading. Their strength is operational stability, but AI-assisted learning is often external or loosely connected. That creates a common gap: students can access information, but contextual tutoring is not integrated with the same course data.
 
-Our system exposes the fast Tesseract path as the default and delegates to a Python FastAPI sidecar for TrOCR and Nougat when the instructor selects the ``accurate'' quality option on upload. The sidecar isolates the heavy Python dependency tree from the Node.js backend and lets us version those models independently. A known limitation reported openly in Chapter~\ref{ch:limitations}: TrOCR's pretrained checkpoint is Latin-only, so Bengali handwriting remains unsupported.
+\subsection{AI-Assisted Learning Systems}
+Recent AI tutoring systems show the value of interactive question answering, guided explanation, and adaptive practice. However, many implementations rely on general chat with limited course grounding. In educational settings, answers are stronger when they are tied to real class materials and topic structure.
 
-\section{Intelligent Tutoring Systems and Mastery Modelling}
-Classical ITS research \cite{anderson1995cognitive,vanlehn2011tutors} showed that structured tutoring with explicit mastery tracking outperforms unstructured help in controlled studies. Corbett and Anderson~\cite{corbett1994bkt} formalised mastery as a latent binary variable updated through Bayesian inference in the influential Bayesian Knowledge Tracing (BKT) model. Piech et al.~\cite{piech2015dkt} generalised this to sequence models in Deep Knowledge Tracing. Wilson et al.~\cite{wilson2016estimating} showed that simpler probabilistic models often match deep alternatives when per-student data is sparse --- the regime in which a small capstone user study operates.
+\subsection{Retrieval-Augmented Generation in Education}
+Retrieval-Augmented Generation (RAG) combines information retrieval with language generation. In course settings, that helps because answers can be tied to available materials instead of relying only on model memory. Current research supports hybrid retrieval that blends lexical and vector signals \cite{lewis2020rag,gao2023ragsurvey}. In our project, RAG is used pragmatically to ground tutor answers in uploaded materials rather than to propose a new retrieval algorithm.
 
-Cognitive Copilot adopts a minimal but principled stance: a conjugate Beta posterior per (student, topic) pair, updated after every quiz attempt. The posterior mean drives difficulty targeting, and the 95\% credible interval is surfaced in the UI. This is deliberately simpler than BKT, but stronger than the na\"{i}ve $+0.1 / -0.05$ rule used in many capstone tutors --- a choice we justify quantitatively in Chapter~\ref{ch:evaluation}.
+\subsection{OCR for Academic Workflows}
+OCR has long been used for document digitization. Traditional OCR engines perform well on clean printed text, while transformer-based OCR is explored for harder cases. In educational workflows, OCR is mainly useful for extracting text from uploaded materials or timetable images so content can be indexed and reused.
 
-\section{Socratic Dialogue and Pedagogy}
-Human tutors typically withhold a direct answer on first ask and instead probe for the student's mental model \cite{chi2001socratic}. Commercial tutors such as Khanmigo \cite{khanmigo2023} have popularised Socratic prompting, but few open-source systems implement it explicitly with multiple named strategies. We encode five pedagogical strategies --- Explain, Socratic, Hint Ladder, Worked Example, and Misconception Probe --- and select among them with a deterministic rule-based selector augmented by the student's current posterior mean. The full rule set is detailed in Section~\ref{sec:agent}.
+\subsection{Agentic and Multi-Mode Tutor Interfaces}
+A modern tutor interface often combines several patterns: free chat, explain mode, question answering, quiz practice, and resource recommendations. The literature on tool-using agents and structured prompting \cite{yao2023react,schick2023toolformer} informs this direction. For this report, the focus stays on implemented user-facing modes rather than speculative agent performance claims.
 
-\section{Agent Architectures and Tool Use}
-Chat-only tutors cannot perform concrete actions such as searching the web or running code to verify a student's hypothesis. The ReAct paradigm \cite{yao2023react} showed that interleaving Thought and Action tokens in the same context enables LLMs to use external tools, and Toolformer \cite{schick2023toolformer} demonstrated that tool-call synthesis can be self-supervised. We implement a bounded ReAct loop (maximum five iterations, twelve seconds wall-clock) with five tools: \texttt{retrieve\_material}, \texttt{search\_web}, \texttt{generate\_practice\_question}, \texttt{render\_diagram}, and \texttt{run\_code}. Structured outputs are produced via Ollama's JSON-schema-constrained \texttt{format} parameter, removing the brittle regex parsing that plagued the earlier iteration of the quiz generator.
+\section{Discussion}
+Table~\ref{tab:novelty-positioning} summarizes how we argue the \textbf{novelty} of this work for CSE~3200: not by denying prior art in LMS or AI, but by being explicit about what we integrated and verified ourselves.
 
-\section{Evaluating Generative Systems}
-Evaluating RAG requires measuring both retrieval quality and answer quality jointly. RAGAS \cite{es2023ragas} and ARES \cite{saad2023arespolicy} popularised LLM-as-judge metrics for faithfulness, context precision, and answer relevance. We adopt a simplified in-repo variant: a three-times majority-vote LLM judge for faithfulness, keyword-overlap for answer relevance, and standard recall@K for retrieval quality. Complete definitions and the golden dataset are presented in Chapter~\ref{ch:evaluation}.
-
-\section{Position of This Project}
-Cognitive Copilot does not claim novelty in any one of the above areas individually; its contribution is \emph{integration}. No other open-source capstone we are aware of combines (a)~local-first RAG over student-uploaded materials, (b)~handwriting and academic-PDF OCR, (c)~a Socratic agent with tool use, (d)~Bayesian mastery tracking, and (e)~an end-to-end evaluation harness --- all running on a single developer machine without cloud LLM APIs. Table~\ref{tab:comparison} summarises the differentiator grid.
-
-\begin{table}[H]
+\begin{table}[htbp]
 \centering
-\small
-\caption{Feature comparison against representative learning systems. $\checkmark$ = fully implemented, $\circ$ = partial/vendor-locked, -- = absent.}
-\label{tab:comparison}
-\begin{tabular}{lcccc}
+\caption{Positioning of Cognitive Copilot relative to common alternatives.}
+\label{tab:novelty-positioning}
+\begin{tabular}{p{1.72in}p{3.82in}}
 \toprule
-\textbf{Feature} & \textbf{Moodle} & \textbf{ChatGPT Edu} & \textbf{Khanmigo} & \textbf{Ours} \\
+\textbf{Typical alternative} & \textbf{What our project does instead} \\
 \midrule
-Grounded retrieval + citations & --           & $\circ$     & $\checkmark$ & $\checkmark$ \\
-Handwriting OCR                & --           & --          & --           & $\checkmark$ \\
-Math OCR (LaTeX output)        & --           & --          & --           & $\checkmark$ \\
-Socratic strategy selector     & --           & --          & $\checkmark$ & $\checkmark$ \\
-Bayesian mastery + CI          & --           & --          & --           & $\checkmark$ \\
-Tool-using agent               & --           & $\circ$     & --           & $\checkmark$ \\
-100\% local / no cloud LLM     & $\checkmark$ & --          & --           & $\checkmark$ \\
-Open evaluation harness        & --           & --          & --           & $\checkmark$ \\
-Internet resource discovery    & --           & $\circ$     & --           & $\checkmark$ \\
-Real-time notifications (WS)   & $\checkmark$ & --          & --           & $\checkmark$ \\
+Generic chatbot & Tutor modes bound to course and topic context; retrieval over course materials where configured. \\
+Standalone LMS without AI & One product vision: the AI Tutor lives inside the same navigation and permission model. \\
+Prototype-only demos & Emphasis on CRUD, validation, authorization, tests, and reproducible local deployment. \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+Based on the related context above, Cognitive Copilot is positioned as an \textbf{implementation-oriented} academic system that:
+\begin{itemize}
+\item integrates LMS modules and AI tutor workflows in one platform,
+\item keeps AI interactions linked with course and topic context,
+\item supports practical classroom operations (community, notifications, routine, analytics),
+\item and prioritizes software correctness and maintainability.
+\end{itemize}
+
+The project contribution is therefore engineering integration and reliable module interoperability, rather than claiming a new AI algorithm.

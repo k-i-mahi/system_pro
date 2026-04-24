@@ -42,6 +42,7 @@
 }
 
 \onehalfspacing
+\renewcommand{\bibname}{References}
 
 \titleformat{\chapter}[display]
   {\bfseries\centering\fontsize{16}{18}\selectfont}
@@ -87,16 +88,11 @@
 
 \hypersetup{pageanchor=false}
 
-% Cover page without page number
-\pagenumbering{gobble}
-\input{chapters/coverpage}
-\clearpage
-
-% Front matter starts with roman numerals
+% Front matter: two unnumbered title pages (cover + inner), then roman from Acknowledgment
 \pagenumbering{roman}
 \setcounter{page}{1}
 \input{chapters/titlepage}
-\clearpage
+\setcounter{page}{1}
 \input{chapters/acknowledgment}
 \clearpage
 \input{chapters/abstract}

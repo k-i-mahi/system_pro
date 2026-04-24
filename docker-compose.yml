@@ -106,6 +106,7 @@ services:
       OLLAMA_HOST: http://ollama:11434
     restart: 'no'
 
+  # Primary application API (FastAPI + Socket.IO)
   backend-py:
     profiles: ['prod-local', 'prod']
     build:

@@ -17,8 +17,17 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   async (error) => {
-    const original = error.config;
-    if (error.response?.status === 401 && !original._retry) {
+    const original = error.config || {};
+    const reqUrl = String(original.url || '');
+    const isAuthEndpoint =
+      reqUrl.includes('/auth/login') ||
+      reqUrl.includes('/auth/register') ||
+      reqUrl.includes('/auth/refresh') ||
+      reqUrl.includes('/auth/forgot-password') ||
+      reqUrl.includes('/auth/verify-otp') ||
+      reqUrl.includes('/auth/reset-password');
+
+    if (error.response?.status === 401 && !original._retry && !isAuthEndpoint) {
       original._retry = true;
       try {
         const refreshToken = useAuthStore.getState().refreshToken;

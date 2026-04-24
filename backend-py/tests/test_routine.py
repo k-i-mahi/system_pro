@@ -76,6 +76,48 @@ async def test_update_slot_not_found(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_course_not_in_plan_returns_404(client: AsyncClient) -> None:
+    token = await _token(client)
+    r = await client.delete(
+        f"{BASE}/courses/00000000-0000-0000-0000-000000000001",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_course_removes_from_schedule(client: AsyncClient) -> None:
+    token = await _token(client)
+    code = "TST8888"
+    create = await client.post(
+        f"{BASE}/courses",
+        json={
+            "courses": [
+                {
+                    "courseCode": code,
+                    "courseName": "Delete Me Course",
+                    "slots": [{"dayOfWeek": "TUE", "startTime": "10:00", "endTime": "11:00", "type": "CLASS"}],
+                }
+            ]
+        },
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert create.status_code == 201
+    course_id = create.json()["data"][0]["id"]
+
+    sched_before = await client.get(f"{BASE}/", headers={"Authorization": f"Bearer {token}"})
+    assert sched_before.status_code == 200
+    assert any(s.get("courseId") == course_id for s in sched_before.json()["data"])
+
+    del_r = await client.delete(f"{BASE}/courses/{course_id}", headers={"Authorization": f"Bearer {token}"})
+    assert del_r.status_code == 200
+
+    sched_after = await client.get(f"{BASE}/", headers={"Authorization": f"Bearer {token}"})
+    assert sched_after.status_code == 200
+    assert not any(s.get("courseId") == course_id for s in sched_after.json()["data"])
+
+
+@pytest.mark.asyncio
 async def test_scan_unsupported_type(client: AsyncClient) -> None:
     token = await _token(client)
     r = await client.post(

@@ -1,42 +1,132 @@
+% Two title pages (cover + inner). Tighter vertical spacing; \singlespacing avoids
+% global \onehalfspacing from stretching these pages.
+
+\newcommand{\TitleCoverBlock}{%
+\begingroup
+\fontsize{18}{27}\selectfont\bfseries\scshape
+A PROJECT REPORT\par
+\vspace{3pt}
+ON\par
+\vspace{5pt}
+COGNITIVE COPILOT: AI-POWERED ACADEMIC LEARNING\par
+\vspace{3pt}
+MANAGEMENT SYSTEM WITH LOCAL LLM INTEGRATION\par
+\endgroup}
+
+\newcommand{\DeptFooterBlock}{%
+\begingroup
+\fontsize{12}{14.4}\selectfont\bfseries
+Department of Computer Science and Engineering\par
+Khulna University of Engineering \& Technology\par
+Khulna 9203, Bangladesh\par
+\vspace{0.25\baselineskip}
+\normalfont April 2026\par
+\endgroup}
+
 \begin{titlepage}
-\centering
+\thispagestyle{empty}
+\begingroup
+\singlespacing
+\vspace*{18pt}
+\begin{center}
+{\fontsize{14}{16}\selectfont\normalfont CSE 3200: System Development Project\par}
 
-{\fontsize{18}{22}\selectfont\bfseries\scshape A Project Report \\
-On \\
-Cognitive Copilot: AI-Powered Academic Learning Management System with Local LLM Integration\par}
+\vspace{12pt}
 
-\vspace{1.2cm}
+\TitleCoverBlock
 
-\includegraphics[width=1.4in]{figures/Logo_KUET.svg.png}
+\vspace{14pt}
 
-\vspace{0.8cm}
+{\fontsize{14}{16}\selectfont\normalfont By\par}
 
-{\large Submitted by\par}
-\vspace{0.25cm}
-{\large Khadimul Islam Mahi \quad (Roll: 2107076)\par}
-{\large Sumaiya Akter \quad (Roll: 2107080)\par}
+\vspace{16pt}
 
-\vspace{1.0cm}
+{\fontsize{14}{16}\selectfont\bfseries Khadimul Islam Mahi\par}
+\vspace{1pt}
+{\fontsize{14}{16}\selectfont\normalfont Roll: 2107076\par}
 
-{\large Supervised by\par}
-\vspace{0.25cm}
-{\large Md. Nazirul Hasan Shawon\par}
-{\large Professor, Department of CSE, KUET\par}
+\vspace{0.38in}
 
-\vspace{1.5cm}
+{\fontsize{14}{16}\selectfont\bfseries \&\par}
 
-\begin{flushleft}
-\textbf{Supervisor's Signature:} \hrulefill
-\end{flushleft}
+\vspace{0.14in}
 
-\vfill
+{\fontsize{14}{16}\selectfont\bfseries Sumaiya Akter\par}
+\vspace{1pt}
+{\fontsize{14}{16}\selectfont\normalfont Roll: 2107080\par}
 
-{\large Submitted in partial fulfillment of the requirements for the course\par}
-{\large CSE 3200: System Development Project\par}
+\vspace{8pt}
 
-\vspace{0.6cm}
-{\large Department of Computer Science and Engineering\par}
-{\large Khulna University of Engineering \& Technology\par}
-{\large April 2026\par}
+\includegraphics[width=1.14in,height=1.0in,keepaspectratio]{figures/Logo_KUET.svg.png}
 
+\vspace{14pt}
+
+\DeptFooterBlock
+\end{center}
+\endgroup
+\end{titlepage}
+
+\newcommand{\TitleInnerBlock}{%
+\begingroup
+\fontsize{18}{27}\selectfont\bfseries\normalfont
+Cognitive Copilot: AI-Powered Academic Learning\par
+\vspace{4pt}
+Management System with Local LLM Integration\par
+\endgroup}
+
+\begin{titlepage}
+\thispagestyle{empty}
+\begingroup
+\singlespacing
+\vspace*{20pt}
+\begin{center}
+\TitleInnerBlock
+
+\vspace{16pt}
+
+{\fontsize{12}{18}\selectfont\normalfont By\par}
+
+\vspace{12pt}
+
+{\fontsize{12}{18}\selectfont\bfseries Khadimul Islam Mahi\par}
+\vspace{1pt}
+{\fontsize{12}{18}\selectfont\normalfont Roll: 2107076\par}
+
+\vspace{0.12in}
+
+{\fontsize{12}{18}\selectfont\bfseries \&\par}
+
+\vspace{0.12in}
+
+{\fontsize{12}{18}\selectfont\bfseries Sumaiya Akter\par}
+\vspace{1pt}
+{\fontsize{12}{18}\selectfont\normalfont Roll: 2107080\par}
+\end{center}
+
+\vspace{20pt}
+
+\noindent{\fontsize{12}{18}\selectfont\bfseries Supervisor:\par}
+\vspace{3pt}
+\noindent\hspace*{0.8in}%
+\begin{minipage}[t]{\dimexpr\textwidth-0.8in\relax}
+{\fontsize{12}{18}\selectfont\bfseries Md. Nazirul Hasan Shawon\par}
+\vspace{2pt}
+{\fontsize{12}{18}\selectfont\bfseries Lecturer\par}
+{\fontsize{12}{18}\selectfont\normalfont Department of Computer Science and Engineering\par
+Khulna University of Engineering \& Technology\par}
+\vspace{8pt}
+\noindent\rule{2.35in}{0.45pt}\par
+\vspace{2pt}
+{\fontsize{12}{18}\selectfont\normalfont Signature}\par
+\end{minipage}
+
+\vspace{14pt}
+
+\begin{center}
+{\fontsize{11}{13.2}\selectfont\normalfont
+\textbf{CSE 3200: System Development Project}\par}
+\vspace{8pt}
+\DeptFooterBlock
+\end{center}
+\endgroup
 \end{titlepage}

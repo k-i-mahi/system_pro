@@ -81,20 +81,31 @@ describe('CommunityPage', () => {
     vi.clearAllMocks();
   });
 
+  async function openThreads(user = userEvent.setup()) {
+    await user.click(screen.getByRole('button', { name: /threads/i }));
+    return user;
+  }
+
   it('renders page title and new thread button', async () => {
     renderPage();
     expect(screen.getByText('Community')).toBeInTheDocument();
-    expect(screen.getByText('New Thread')).toBeInTheDocument();
+    const user = userEvent.setup();
+    await openThreads(user);
+    expect(screen.getByText('Start Thread')).toBeInTheDocument();
   });
 
-  it('renders tab buttons', () => {
+  it('renders tab buttons', async () => {
     renderPage();
+    const user = userEvent.setup();
+    await openThreads(user);
     expect(screen.getByText('All Threads')).toBeInTheDocument();
     expect(screen.getByText('My Courses')).toBeInTheDocument();
   });
 
   it('renders thread list after loading', async () => {
     renderPage();
+    const user = userEvent.setup();
+    await openThreads(user);
     await waitFor(() => {
       expect(screen.getByText('Tips for Big-O notation?')).toBeInTheDocument();
     });
@@ -103,6 +114,8 @@ describe('CommunityPage', () => {
 
   it('shows course badge on threads with course', async () => {
     renderPage();
+    const user = userEvent.setup();
+    await openThreads(user);
     await waitFor(() => {
       expect(screen.getByText('CS 101')).toBeInTheDocument();
     });
@@ -111,15 +124,17 @@ describe('CommunityPage', () => {
   it('shows new thread form when button clicked', async () => {
     renderPage();
     const user = userEvent.setup();
-    await user.click(screen.getByText('New Thread'));
-    expect(screen.getByPlaceholderText('Thread title...')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("What's on your mind?")).toBeInTheDocument();
+    await openThreads(user);
+    await user.click(screen.getByText('Start Thread'));
+    expect(screen.getByPlaceholderText('Thread title')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Share context, question, and what you've tried...")).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Tags (comma separated)')).toBeInTheDocument();
   });
 
   it('shows thread detail when thread is clicked', async () => {
     renderPage();
     const user = userEvent.setup();
+    await openThreads(user);
     await waitFor(() => {
       expect(screen.getByText('Tips for Big-O notation?')).toBeInTheDocument();
     });
@@ -143,6 +158,8 @@ describe('CommunityPage', () => {
     );
 
     renderPage();
+    const user = userEvent.setup();
+    await openThreads(user);
     await waitFor(() => {
       expect(screen.getByText('No threads yet. Start the conversation!')).toBeInTheDocument();
     });

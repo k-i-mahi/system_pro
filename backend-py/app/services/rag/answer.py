@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import AsyncGenerator, Callable, Optional
+from typing import Any, AsyncGenerator, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +36,7 @@ class AnswerResult:
     answer: str
     citations: list[AnswerCitation]
     chunks: list[RetrievedChunk]
+    ingest: Optional[dict[str, Any]] = None
 
 
 def _format_context(chunks: list[RetrievedChunk]) -> str:
@@ -45,6 +47,35 @@ def _format_context(chunks: list[RetrievedChunk]) -> str:
         locator = " · ".join(filter(None, [c.material_title, f"p.{c.page}" if c.page else None, f"§ {c.heading}" if c.heading else None]))
         parts.append(f"[{i + 1}] {locator}\n{c.content}")
     return "\n\n".join(parts)
+
+
+def _should_skip_llm_for_ingest(ingest_meta: dict[str, Any] | None, chunk_count: int) -> bool:
+    if chunk_count > 0 or not ingest_meta:
+        return False
+    total = int(ingest_meta.get("total") or 0)
+    ready = int(ingest_meta.get("ready") or 0)
+    return total > 0 and ready == 0
+
+
+def _ingest_wait_message(ingest_meta: dict[str, Any]) -> str:
+    lines = [
+        "None of the files in this scope are ready for grounded answers yet.",
+        "Wait until indexing finishes (or fix failed uploads), then ask again.",
+    ]
+    p, proc, fail = (
+        int(ingest_meta.get("pending") or 0),
+        int(ingest_meta.get("processing") or 0),
+        int(ingest_meta.get("failed") or 0),
+    )
+    if p or proc:
+        lines.append(f"Status: {p} pending, {proc} processing.")
+    if fail:
+        lines.append(f"{fail} material(s) failed indexing.")
+    errs = ingest_meta.get("errors") or []
+    if isinstance(errs, list) and errs:
+        lines.append("Details: " + "; ".join(str(e) for e in errs[:5]))
+    lines.append("Next step: confirm each selected file shows as indexed in the materials list.")
+    return "\n\n".join(lines)
 
 
 def _to_citation(chunk: RetrievedChunk, index: int) -> AnswerCitation:
@@ -64,8 +95,13 @@ async def answer_with_citations(
     question: str,
     scope: RetrievalScope,
     user_id: str | None = None,
+    ingest_meta: dict[str, Any] | None = None,
 ) -> AnswerResult:
     chunks = await retrieve_chunks(db, question, scope)
+    if _should_skip_llm_for_ingest(ingest_meta, len(chunks)):
+        msg = _ingest_wait_message(ingest_meta or {})
+        return AnswerResult(answer=msg, citations=[], chunks=[], ingest=ingest_meta)
+
     citations = [_to_citation(c, i + 1) for i, c in enumerate(chunks)]
     context = _format_context(chunks)
 
@@ -75,7 +111,7 @@ async def answer_with_citations(
     ]
 
     answer = await chat_completion(messages, route="ask-course", temperature=0.2, user_id=user_id)
-    return AnswerResult(answer=answer, citations=citations, chunks=chunks)
+    return AnswerResult(answer=answer, citations=citations, chunks=chunks, ingest=ingest_meta)
 
 
 async def stream_answer_with_citations(
@@ -83,8 +119,19 @@ async def stream_answer_with_citations(
     question: str,
     scope: RetrievalScope,
     user_id: str | None = None,
+    ingest_meta: dict[str, Any] | None = None,
 ) -> AsyncGenerator[str, None]:
+    if ingest_meta is not None:
+        yield f"event: meta\ndata: {json.dumps({'ingest': ingest_meta})}\n\n"
+
     chunks = await retrieve_chunks(db, question, scope)
+    if _should_skip_llm_for_ingest(ingest_meta, len(chunks)):
+        msg = _ingest_wait_message(ingest_meta or {})
+        yield f"event: token\ndata: {json.dumps({'content': msg})}\n\n"
+        yield f"event: citations\ndata: {json.dumps({'citations': [], 'chunkCount': 0})}\n\n"
+        yield f"event: done\ndata: {json.dumps({'ok': True})}\n\n"
+        return
+
     citations = [_to_citation(c, i + 1) for i, c in enumerate(chunks)]
     context = _format_context(chunks)
 
@@ -93,7 +140,6 @@ async def stream_answer_with_citations(
         {"role": "user", "content": f"Student question: {question}\n\n--- Course material excerpts ---\n{context}\n--- End excerpts ---"},
     ]
 
-    import json
     async for token in chat_completion_stream(messages, route="ask-course", temperature=0.2, user_id=user_id):
         # Stream a stable object shape so frontend clients can parse chunks consistently.
         yield f"event: token\ndata: {json.dumps({'content': token})}\n\n"

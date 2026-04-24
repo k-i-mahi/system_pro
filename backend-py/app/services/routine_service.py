@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.models.community import Community, CommunityMember
-from app.models.course import Course, Enrollment, ScheduleSlot
+from app.models.course import Course, Enrollment, ScheduleSlot, Topic, TopicProgress
+from app.models.misc import Notification
 from app.models.enums import CommunityRole, DayOfWeek, SlotType
 from app.models.misc import RoutineScan
 from app.schemas.routine import BulkCreateCoursesRequest, MoveSlotRequest, UpdateSlotRequest
@@ -33,7 +34,27 @@ def _slot_to_dict(s: ScheduleSlot, **extra) -> dict:
 
 
 def _time_overlaps(a_start: str, a_end: str, b_start: str, b_end: str) -> bool:
-    return a_start < b_end and a_end > b_start
+    def _to_minutes(t: str) -> int:
+        h, m = map(int, t.split(":"))
+        return h * 60 + m
+
+    def _normalized_end(start: str, end: str) -> int:
+        s_min = _to_minutes(start)
+        e_min = _to_minutes(end)
+        if e_min > s_min:
+            return e_min
+        s_hour = int(start.split(":")[0])
+        e_hour = int(end.split(":")[0])
+        # Accept clockwise 12h-style input like 11:00 -> 01:30.
+        if s_hour < 12 and e_hour < 12:
+            return e_min + 12 * 60
+        return e_min
+
+    a_s = _to_minutes(a_start)
+    a_e = _normalized_end(a_start, a_end)
+    b_s = _to_minutes(b_start)
+    b_e = _normalized_end(b_start, b_end)
+    return a_s < b_e and a_e > b_s
 
 
 def _add_minutes(t: str, minutes: int) -> str:
@@ -152,8 +173,72 @@ async def get_schedule(db: AsyncSession, user_id: str) -> list[dict]:
 
 
 async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCoursesRequest) -> list[dict]:
+    user_course_ids = await _user_course_ids(db, user_id)
+    existing_slots: list[dict] = []
+    if user_course_ids:
+        existing_result = await db.execute(
+            select(ScheduleSlot, Course)
+            .join(Course, ScheduleSlot.course_id == Course.id)
+            .where(ScheduleSlot.course_id.in_(user_course_ids))
+        )
+        existing_slots = [
+            {
+                "dayOfWeek": slot.day_of_week,
+                "startTime": slot.start_time,
+                "endTime": slot.end_time,
+                "courseCode": course.course_code,
+            }
+            for slot, course in existing_result.all()
+        ]
+
+    proposed_slots: list[dict] = []
     results = []
     for course_data in body.courses:
+        for slot in course_data.slots:
+            if not _time_overlaps(slot.startTime, slot.endTime, slot.startTime, slot.endTime):
+                raise ValidationError(
+                    "Schedule conflict: check routine properly and enter a free valid slot.",
+                    details=[
+                        {
+                            "courseCode": course_data.courseCode,
+                            "dayOfWeek": slot.dayOfWeek,
+                            "startTime": slot.startTime,
+                            "endTime": slot.endTime,
+                            "reason": "INVALID_TIME_RANGE",
+                            "message": "End time must be later than start time",
+                        }
+                    ],
+                )
+
+            conflicts = []
+            for occupied in [*existing_slots, *proposed_slots]:
+                if occupied["dayOfWeek"] != slot.dayOfWeek:
+                    continue
+                if not _time_overlaps(slot.startTime, slot.endTime, occupied["startTime"], occupied["endTime"]):
+                    continue
+                conflicts.append(
+                    {
+                        "reason": "SAME_DAY_SAME_TIME",
+                        "conflictsWithCourseCode": occupied["courseCode"],
+                        "conflictsWithDay": occupied["dayOfWeek"],
+                        "conflictsWithStartTime": occupied["startTime"],
+                        "conflictsWithEndTime": occupied["endTime"],
+                    }
+                )
+            if conflicts:
+                raise ValidationError(
+                    "Schedule conflict: check routine properly and enter a free valid slot.",
+                    details=[
+                        {
+                            "courseCode": course_data.courseCode,
+                            "dayOfWeek": slot.dayOfWeek,
+                            "startTime": slot.startTime,
+                            "endTime": slot.endTime,
+                            "conflicts": conflicts,
+                        }
+                    ],
+                )
+
         # Find or create course
         result = await db.execute(
             select(Course).where(Course.course_code == course_data.courseCode)
@@ -187,6 +272,14 @@ async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCo
                 type=slot.type,
                 room=slot.room,
             ))
+            proposed_slots.append(
+                {
+                    "dayOfWeek": slot.dayOfWeek,
+                    "startTime": slot.startTime,
+                    "endTime": slot.endTime,
+                    "courseCode": course_data.courseCode,
+                }
+            )
 
         results.append({
             "id": course.id,
@@ -215,6 +308,9 @@ async def update_slot(db: AsyncSession, slot_id: str, body: UpdateSlotRequest) -
         slot.type = updates["type"]
     if "room" in updates:
         slot.room = updates["room"]
+
+    if not _time_overlaps(slot.start_time, slot.end_time, slot.start_time, slot.end_time):
+        raise ValidationError("End time must be later than start time")
 
     await db.commit()
     await db.refresh(slot)
@@ -335,10 +431,66 @@ async def move_slot(db: AsyncSession, slot_id: str, user_id: str, body: MoveSlot
 
 
 async def delete_course(db: AsyncSession, user_id: str, course_id: str) -> None:
+    """
+    Remove this course from the user's learning plan:
+    leave communities tied to the course, drop enrollment, clear topic progress,
+    remove schedule-related notifications, and delete orphan schedule slots when
+    no enrollments and no communities reference the course anymore.
+    """
+    has_enrollment = (
+        await db.execute(
+            select(Enrollment.id).where(Enrollment.user_id == user_id, Enrollment.course_id == course_id)
+        )
+    ).scalar_one_or_none()
+
+    in_community = (
+        await db.execute(
+            select(CommunityMember.id)
+            .join(Community, Community.id == CommunityMember.community_id)
+            .where(CommunityMember.user_id == user_id, Community.course_id == course_id)
+        )
+    ).scalar_one_or_none()
+
+    if not has_enrollment and not in_community:
+        raise NotFoundError("This course is not in your schedule or classroom communities")
+
     await db.execute(
-        delete(Enrollment).where(
-            Enrollment.user_id == user_id,
-            Enrollment.course_id == course_id,
+        delete(CommunityMember).where(
+            CommunityMember.user_id == user_id,
+            CommunityMember.community_id.in_(select(Community.id).where(Community.course_id == course_id)),
         )
     )
+
+    topic_ids = (await db.execute(select(Topic.id).where(Topic.course_id == course_id))).scalars().all()
+    if topic_ids:
+        await db.execute(
+            delete(TopicProgress).where(TopicProgress.user_id == user_id, TopicProgress.topic_id.in_(topic_ids))
+        )
+
+    slot_ids = list(
+        (await db.execute(select(ScheduleSlot.id).where(ScheduleSlot.course_id == course_id))).scalars().all()
+    )
+    meta = Notification.metadata_
+    notif_cond = [meta["courseId"].as_string() == course_id]
+    if slot_ids:
+        notif_cond.append(meta["slotId"].as_string().in_(slot_ids))
+    await db.execute(
+        delete(Notification).where(
+            Notification.user_id == user_id,
+            Notification.metadata_.isnot(None),
+            or_(*notif_cond),
+        )
+    )
+
+    await db.execute(delete(Enrollment).where(Enrollment.user_id == user_id, Enrollment.course_id == course_id))
+
+    any_enrollment_left = (
+        await db.execute(select(Enrollment.id).where(Enrollment.course_id == course_id).limit(1))
+    ).scalar_one_or_none()
+    community_left = (
+        await db.execute(select(Community.id).where(Community.course_id == course_id).limit(1))
+    ).scalar_one_or_none()
+    if not any_enrollment_left and not community_left:
+        await db.execute(delete(ScheduleSlot).where(ScheduleSlot.course_id == course_id))
+
     await db.commit()

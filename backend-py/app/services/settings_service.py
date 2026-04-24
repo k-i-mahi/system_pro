@@ -65,7 +65,7 @@ async def update_notifications(db: AsyncSession, user_id: str, data: dict) -> di
         "notifCourseOfMonth": "notif_course_of_month",
     }
     for key, attr in field_map.items():
-        if key in data and data[key] is not None:
+        if key in data:
             setattr(user, attr, data[key])
     await db.commit()
     return {

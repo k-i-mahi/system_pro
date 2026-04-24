@@ -72,3 +72,19 @@ async def test_delete_not_found(client: AsyncClient) -> None:
     token = await _token(client)
     r = await client.delete(BASE + "/nonexistent", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_submit_class_response_not_found(client: AsyncClient) -> None:
+    token = await _token(client)
+    r = await client.post(
+        BASE + "/class-response",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "notificationId": "nonexistent",
+            "topicCovered": "Complexity analysis",
+            "materialNeeded": True,
+            "materialRequest": "Need practice sheet",
+        },
+    )
+    assert r.status_code == 404

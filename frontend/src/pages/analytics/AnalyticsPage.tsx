@@ -3,11 +3,11 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   BookOpen, Target, Users, TrendingUp,
-  AlertTriangle, Brain, ClipboardList, RefreshCw, GraduationCap,
+  AlertTriangle, Brain, RefreshCw, GraduationCap
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line,
+  ResponsiveContainer, PieChart, Pie, Cell,
 } from 'recharts';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth.store';
@@ -89,10 +89,8 @@ export default function AnalyticsPage() {
                 low: 'border-l-primary bg-blue-50/50',
               };
               const priorityStyle = priorityStyles[s.priority as string] || '';
-              const Icon = s.type === 'study' ? Brain : s.type === 'exam' ? ClipboardList : RefreshCw;
-              const actionLink = s.type === 'exam'
-                ? `/ai-tutor?topicId=${s.topicId}&courseId=${s.courseId}&mode=exam`
-                : `/ai-tutor?topicId=${s.topicId}&courseId=${s.courseId}`;
+              const Icon = s.type === 'study' ? Brain : RefreshCw;
+              const actionLink = `/ai-tutor?topicId=${s.topicId}&courseId=${s.courseId}`;
 
               return (
                 <Link
@@ -287,31 +285,6 @@ export default function AnalyticsPage() {
               </ResponsiveContainer>
             ) : (
               <p className="text-text-muted text-sm py-8 text-center">No attendance data</p>
-            )}
-          </div>
-
-          {/* Exam history */}
-          <div className="card lg:col-span-2">
-            <h3 className="font-semibold mb-4">Exam Score Trend</h3>
-            {courseAnalytics.examHistory?.length > 0 ? (
-              <ResponsiveContainer width="100%" height={250}>
-                <LineChart data={courseAnalytics.examHistory}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="createdAt"
-                    tickFormatter={(v: string) => new Date(v).toLocaleDateString()}
-                    tick={{ fontSize: 12 }}
-                  />
-                  <YAxis domain={[0, 100]} />
-                  <Tooltip
-                    labelFormatter={(v: any) => new Date(v).toLocaleDateString()}
-                    formatter={(v: any) => `${Number(v).toFixed(0)}%`}
-                  />
-                  <Line type="monotone" dataKey="score" stroke="#3B82F6" strokeWidth={2} dot />
-                </LineChart>
-              </ResponsiveContainer>
-            ) : (
-              <p className="text-text-muted text-sm py-8 text-center">No exam data yet</p>
             )}
           </div>
 

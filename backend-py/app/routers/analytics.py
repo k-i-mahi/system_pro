@@ -4,7 +4,11 @@ from fastapi import APIRouter, Depends
 
 from app.core.deps import CurrentUserIdDep, DBDep, get_current_user_id
 from app.core.response import success
-from app.schemas.analytics import UpdateAttendanceRequest, UpdateCtScoreRequest, UpdateLabScoreRequest
+from app.schemas.analytics import (
+    UpdateAttendanceRequest,
+    UpdateCtScoreRequest,
+    UpdateLabScoreRequest,
+)
 from app.services import analytics_service, evaluation_service
 
 router = APIRouter(dependencies=[Depends(get_current_user_id)])

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Camera, Save } from 'lucide-react';
+import { Camera, Save, Trash2 } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth.store';
 import toast from 'react-hot-toast';
@@ -55,6 +55,17 @@ export default function ProfilePage() {
       setUser({ ...useAuthStore.getState().user!, avatarUrl: res.data.data.avatarUrl });
       toast.success('Avatar updated');
     },
+    onError: () => toast.error('Failed to upload avatar'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => api.delete('/profile'),
+    onSuccess: () => {
+      toast.success('Account deleted');
+      useAuthStore.getState().logout();
+      window.location.href = '/login';
+    },
+    onError: () => toast.error('Failed to delete account'),
   });
 
   if (isLoading) return <div className="text-center py-12 text-text-muted">Loading...</div>;
@@ -115,9 +126,10 @@ export default function ProfilePage() {
                 <button
                   onClick={() => updateMutation.mutate(form)}
                   className="btn-primary text-sm flex items-center gap-1"
+                  disabled={updateMutation.isPending}
                 >
                   <Save size={14} />
-                  Save
+                  {updateMutation.isPending ? 'Saving...' : 'Save'}
                 </button>
               </div>
             )}
@@ -221,6 +233,26 @@ export default function ProfilePage() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="card mt-6 border border-danger/30">
+        <h2 className="font-semibold text-danger mb-2">Danger Zone</h2>
+        <p className="text-sm text-text-secondary mb-4">
+          Permanently delete your account and remove your profile access.
+        </p>
+        <button
+          className="btn-secondary text-danger border border-danger/40 flex items-center gap-2"
+          onClick={() => {
+            const confirmed = window.confirm('Delete your account permanently? This action cannot be undone.');
+            if (confirmed) {
+              deleteMutation.mutate();
+            }
+          }}
+          disabled={deleteMutation.isPending}
+        >
+          <Trash2 size={14} />
+          {deleteMutation.isPending ? 'Deleting...' : 'Delete Account'}
+        </button>
       </div>
     </div>
   );

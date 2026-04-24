@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
@@ -12,6 +12,7 @@ import {
   type Citation,
   type TutorMode,
 } from '@/components/ai-tutor';
+import { normalizeTutorMode } from '@/lib/tutor-mode';
 
 interface CourseListItem {
   id: string;
@@ -19,9 +20,20 @@ interface CourseListItem {
   courseName: string;
 }
 
+interface MaterialRow {
+  id: string;
+  title: string;
+  fileType?: string;
+  hasEmbeddings?: boolean;
+  ingestStatus?: string;
+  chunkCount?: number;
+  ingestError?: string | null;
+}
+
 interface Topic {
   id: string;
   title: string;
+  materials?: MaterialRow[];
 }
 
 interface CourseDetail {
@@ -45,11 +57,13 @@ export default function AITutorPage() {
   const [searchParams] = useSearchParams();
   const initialTopicId = searchParams.get('topicId') || '';
   const initialCourseId = searchParams.get('courseId') || '';
-  const initialMode = (searchParams.get('mode') as TutorMode) || 'chat';
+  const initialMode = normalizeTutorMode(searchParams.get('mode'));
+  const initialPrompt = searchParams.get('prompt') || '';
 
   const [mode, setMode] = useState<TutorMode>(initialMode);
   const [selectedCourse, setSelectedCourse] = useState(initialCourseId);
   const [selectedTopic, setSelectedTopic] = useState(initialTopicId);
+  const [prefillPrompt, setPrefillPrompt] = useState(initialPrompt);
   const [previewCitation, setPreviewCitation] = useState<Citation | null>(null);
 
   const { data: myCourses = [] } = useQuery({
@@ -65,12 +79,31 @@ export default function AITutorPage() {
         .get(`/courses/${selectedCourse}`)
         .then((r) => r.data.data as CourseDetail),
     enabled: !!selectedCourse,
+    refetchInterval: (query) => {
+      const data = query.state.data as CourseDetail | undefined;
+      const topic = data?.topics?.find((t) => t.id === selectedTopic);
+      const mats = topic?.materials ?? [];
+      const ingesting = mats.some(
+        (m) =>
+          m.fileType !== 'LINK' &&
+          (m.ingestStatus === 'PENDING' || m.ingestStatus === 'PROCESSING')
+      );
+      return mode === 'ask-course' && !!selectedCourse && ingesting ? 3000 : false;
+    },
   });
 
   const selectedTopicObj = useMemo(
     () => courseDetail?.topics?.find((t) => t.id === selectedTopic),
     [courseDetail, selectedTopic]
   );
+
+  useEffect(() => {
+    setSelectedCourse(searchParams.get('courseId') || '');
+    setSelectedTopic(searchParams.get('topicId') || '');
+    setMode(normalizeTutorMode(searchParams.get('mode')));
+    setPrefillPrompt(searchParams.get('prompt') || '');
+    setPreviewCitation(null);
+  }, [searchParams]);
 
   const showPreview = mode === 'ask-course' && !!previewCitation;
 
@@ -148,12 +181,14 @@ export default function AITutorPage() {
                 topicId={selectedTopic || undefined}
                 courseId={selectedCourse || undefined}
                 quickActions={CHAT_QUICK_ACTIONS}
+                initialPrompt={prefillPrompt || undefined}
               />
             )}
             {mode === 'ask-course' && (
               <AskCoursePane
                 courseId={selectedCourse || undefined}
                 topicId={selectedTopic || undefined}
+                materials={selectedTopicObj?.materials}
                 onCitationClick={setPreviewCitation}
               />
             )}
@@ -165,6 +200,7 @@ export default function AITutorPage() {
                 systemPrimer={EXPLAIN_PRIMER}
                 emptyStateTitle="Ask for a structured explanation"
                 emptyStateHint="Intuition → Core idea → Walkthrough → Pitfalls → Quick check."
+                initialPrompt={prefillPrompt || undefined}
                 quickActions={[
                   { label: 'Explain this topic', prompt: 'Please explain this topic from first principles.' },
                   { label: 'Walk me through the proof', prompt: 'Walk me through the proof step by step.' },

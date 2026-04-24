@@ -1,464 +1,394 @@
 \chapter{Methodology}
 \label{ch:design}
 
-\section{System Design Approach}
-The system design follows a \emph{modular, layered} architecture. At the highest level the client interface is separated from API orchestration, domain services, persistence, and asynchronous workers. This organization reduces coupling among learning features (AI tutoring, routine scanning, community interactions) so each feature can evolve independently. All LLM calls are instrumented through a shared \texttt{withLogging} wrapper; all heavy inference tasks are queued through BullMQ workers so the HTTP thread stays responsive under load.
+\section{Introduction}
+This chapter explains \emph{how} we approached the system: the constraints we respected, the layered architecture we chose, and the modeling artifacts (use case, structural, behavioral, deployment, and data-flow views) that make the implementation easier to reason about. The focus stays on methodology and design rationale; detailed run configuration and test evidence appear in Chapter~IV.
 
-\section{High-Level Architecture}
-\label{sec:arch}
-Figure~\ref{fig:arch} shows the overall system architecture and data flow, including the Python AI sidecar introduced for advanced OCR.
+\section{Problem Design and Analysis}
+\subsection{Design principles}
+The project has the following design principles:
+\begin{enumerate}[label=\arabic*.]
+	\item \textbf{Modularity:} frontend is clearly separated from API, services and data layers.
+	\item \textbf{Know your user:} separate actions for students and tutors handled in the UI and API.
+	\item \textbf{Reliability first:} background tasks are used to ensure responsiveness.
+	\item \textbf{Maintainability:} API contracts and schema validation are used.
+\end{enumerate}
 
-\begin{figure}[H]
+\subsection{Core functional actors}
+The system supports three role patterns:
+\begin{itemize}
+\item \textbf{Student:} learns through courses, AI Tutor, routine, and community.
+\item \textbf{Tutor:} manages class operations, announcements, and monitoring views.
+\item \textbf{Admin-level control:} extends management and moderation operations where configured.
+\end{itemize}
+
+\section{Overall Framework and System Architecture}
+The deployed architecture has four main layers:
+\begin{itemize}
+\item \textbf{Frontend:} React + TypeScript application for all user-facing pages.
+\item \textbf{Backend API:} FastAPI service handling authentication, CRUD, and business logic.
+\item \textbf{Data and Queue Layer:} PostgreSQL for persistence and Redis for cache/queue support.
+\item \textbf{AI and Worker Layer:} local model integration and worker processes for long-running jobs.
+\end{itemize}
+
+\begin{figure}[htbp]
 \centering
+\resizebox{0.92\textwidth}{!}{%
 \begin{tikzpicture}[
-    node distance=8mm and 9mm,
-    box/.style={draw, rounded corners, align=center, minimum width=2.9cm, minimum height=9mm, fill=kuetgray},
+    node distance=10mm and 12mm,
+    layer/.style={draw, rounded corners, align=center, minimum width=3.4cm, minimum height=9mm, fill=kuetgray},
     arr/.style={-{Stealth}, thick}
 ]
-% Tier 1 — Client
-\node[box, fill=blue!12] (ui) {Frontend\\React + TypeScript};
+\node[layer, fill=blue!10] (frontend) {Frontend Layer\\React + TypeScript};
+\node[layer, fill=green!10, below=of frontend] (api) {Backend API Layer\\FastAPI Routers + Validation};
+\node[layer, fill=orange!12, below left=of api] (data) {Data Layer\\PostgreSQL + Redis};
+\node[layer, fill=purple!10, below right=of api] (worker) {Worker / AI Layer\\Queue Workers + Tutor Services};
 
-% Tier 2 — API
-\node[box, fill=blue!8, below=of ui] (api) {API Layer\\Express + Zod Validators};
-
-% Tier 3 — Services and Workers
-\node[box, fill=green!10, below left=12mm and 14mm of api]  (service) {Domain Services\\AI, RAG, OCR, Search};
-\node[box, fill=green!10, below right=12mm and 14mm of api] (worker)  {BullMQ Workers\\Ingest, OCR, Notify};
-
-% Tier 4 — Infrastructure
-\node[box, fill=orange!10, below=14mm of service, xshift=-16mm] (db)      {PostgreSQL\,15\\+ pgvector};
-\node[box, fill=orange!10, below=14mm of service, xshift=16mm]  (redis)   {Redis\,7\\Queue + Cache};
-\node[box, fill=purple!10, below=14mm of worker, xshift=-16mm]  (ollama)  {Ollama\\Qwen2.5\,7B};
-\node[box, fill=purple!10, below=14mm of worker, xshift=16mm]   (sidecar) {AI Sidecar\\Python FastAPI};
-
-\draw[arr] (ui)      -- (api);
-\draw[arr] (api)     -- (service);
-\draw[arr] (api)     -- (worker);
-\draw[arr] (service) -- (db);
-\draw[arr] (service) -- (redis);
-\draw[arr] (service) -- (ollama);
-\draw[arr] (service) -- (sidecar);
-\draw[arr] (worker)  -- (redis);
-\draw[arr] (worker)  -- (db);
-\draw[arr] (worker)  -- (sidecar);
+\draw[arr] (frontend) -- (api);
+\draw[arr] (api) -- (data);
+\draw[arr] (api) -- (worker);
+\draw[arr, dashed] (worker) -- (data);
 \end{tikzpicture}
-\caption{Cognitive Copilot high-level architecture. The Python AI Sidecar (FastAPI) handles all heavy ML inference (TrOCR, Nougat) independently from the Node.js backend.}
-\label{fig:arch}
+}
+\caption{Layered architecture of the Cognitive Copilot system.}
+\label{fig:system-layer-arch}
 \end{figure}
 
 \section{Use Case Diagram}
-The main actors are Student, Tutor, and Admin. Figure~\ref{fig:usecase} maps the functional core.
-
-\begin{figure}[H]
+\begin{figure}[htbp]
 \centering
+\resizebox{0.90\textwidth}{!}{%
 \begin{tikzpicture}[
-    actor/.style={draw, align=center, minimum width=1.9cm, minimum height=7mm, fill=blue!8, font=\small},
-    usecase/.style={ellipse, draw, align=center, minimum width=3.1cm, minimum height=8mm, fill=green!6, font=\small},
-    arr/.style={-}
+    actor/.style={draw, rounded corners, align=center, minimum width=1.9cm, minimum height=7mm, fill=blue!8},
+    usecase/.style={ellipse, draw, align=center, minimum width=3.6cm, minimum height=8mm, fill=green!10},
+    boundary/.style={draw, rounded corners, minimum width=10.6cm, minimum height=6.9cm},
+    link/.style={-}
 ]
-\node[actor] (student) at (-5.2,1.8)  {Student};
-\node[actor] (tutor)   at (-5.2,0)    {Tutor};
-\node[actor] (admin)   at (-5.2,-1.8) {Admin};
+\node[boundary] (sys) at (1.7,0) {};
+\node[anchor=north west, font=\small\bfseries] at (-3.4,3.25) {Cognitive Copilot};
 
-\node[usecase] (login)     at (0,3.0)   {Login / Register};
-\node[usecase] (routine)   at (0,1.8)   {OCR Routine Scan};
-\node[usecase] (chat)      at (0,0.6)   {AI Tutor / RAG Chat};
-\node[usecase] (quiz)      at (0,-0.6)  {Generate \& Submit Quiz};
-\node[usecase] (community) at (0,-1.8)  {Community Discussion};
-\node[usecase] (resources) at (0,-3.0)  {Discover Resources};
-\node[usecase] (marks)     at (4.5,-0.6) {Upload Marks};
-\node[usecase] (analytics) at (4.5,0.9)  {View Analytics};
-\node[usecase] (announce)  at (4.5,-2.1) {Post Announcement};
+\node[actor] (student) at (-6.6,1.8) {Student};
+\node[actor] (tutor) at (-6.6,0.0) {Tutor};
+\node[actor] (admin) at (-6.6,-1.8) {Admin};
 
-\draw[arr] (student) -- (login);
-\draw[arr] (student) -- (routine);
-\draw[arr] (student) -- (chat);
-\draw[arr] (student) -- (quiz);
-\draw[arr] (student) -- (community);
-\draw[arr] (student) -- (resources);
-\draw[arr] (student) -- (analytics);
-\draw[arr] (tutor)   -- (community);
-\draw[arr] (tutor)   -- (marks);
-\draw[arr] (tutor)   -- (announce);
-\draw[arr] (tutor)   -- (analytics);
-\draw[arr] (admin)   -- (marks);
-\draw[arr] (admin)   -- (announce);
-\draw[arr] (admin)   -- (analytics);
+\node[usecase] (auth) at (-1.2,2.2) {Login / Profile};
+\node[usecase] (courses) at (-1.2,0.9) {Courses + Topics};
+\node[usecase] (routine) at (-1.2,-0.4) {Routine + Attendance};
+\node[usecase] (aitutor) at (-1.2,-1.7) {AI Tutor Modes};
+\node[usecase] (community) at (4.6,1.6) {Community + Threads};
+\node[usecase] (analytics) at (4.6,0.0) {Analytics};
+\node[usecase] (notify) at (4.6,-1.6) {Notifications};
+
+\draw[link] (student) -- (auth);
+\draw[link] (student) -- (courses);
+\draw[link] (student) -- (routine);
+\draw[link] (student) -- (aitutor);
+\draw[link] (student) -- (community);
+\draw[link] (student) -- (notify);
+
+\draw[link] (tutor) -- (courses);
+\draw[link] (tutor) -- (routine);
+\draw[link] (tutor) -- (community);
+\draw[link] (tutor) -- (analytics);
+\draw[link] (tutor) -- (notify);
+
+\draw[link] (admin) -- (auth);
+\draw[link] (admin) -- (community);
+\draw[link] (admin) -- (analytics);
 \end{tikzpicture}
-\caption{Use Case Diagram of Core Actors and Functions}
-\label{fig:usecase}
+}
+\caption{Use case diagram of key actors and system interactions.}
+\label{fig:use-case-diagram}
 \end{figure}
 
-\section{UML Class Diagram}
-Figure~\ref{fig:classdiag} summarises the essential data classes and their associations from the Prisma schema.
+\section{Core Data Domains}
+The project data model is organized into practical domains:
+\begin{itemize}
+\item Identity and profile data
+\item Course, enrollment, topic, and material data
+\item Routine and attendance data
+\item Community and thread interaction data
+\item Notification and analytics data
+\item AI tutor interaction and progress-related data
+\end{itemize}
 
-\begin{figure}[H]
+\section{Class Diagram (High Level)}
+\begin{figure}[htbp]
 \centering
+\resizebox{0.95\textwidth}{!}{%
 \begin{tikzpicture}[
-    cls/.style={draw, rounded corners, align=left, minimum width=3.3cm, minimum height=1.1cm, fill=yellow!8, font=\small},
+    clsbox/.style={draw, rounded corners, align=left, minimum width=3.0cm, minimum height=1.1cm, fill=orange!10},
     rel/.style={-{Stealth}, thick}
 ]
-\node[cls] (user)      at (-4.8, 2.4)  {\textbf{User}\\id, name, email, role};
-\node[cls] (course)    at ( 0,   2.4)  {\textbf{Course}\\id, code, name, type};
-\node[cls] (enroll)    at ( 4.8, 2.4)  {\textbf{Enrollment}\\userId, courseId};
-\node[cls] (topic)     at ( 0,   0.6)  {\textbf{Topic}\\courseId, title, week};
-\node[cls] (material)  at ( 4.8, 0.6)  {\textbf{Material}\\topicId, fileUrl, ingestStatus};
-\node[cls] (embed)     at ( 4.8,-1.2)  {\textbf{Embedding}\\materialId, vector(768)};
-\node[cls] (progress)  at (-4.8, 0.6)  {\textbf{TopicProgress}\\userId, topicId, $\alpha$, $\beta$};
-\node[cls] (llmcall)   at (-4.8,-1.2)  {\textbf{LlmCall}\\route, latencyMs, status};
-\node[cls] (thread)    at ( 0,  -1.2)  {\textbf{Thread}\\courseId, creatorId};
-\node[cls] (notif)     at ( 0,  -2.8)  {\textbf{Notification}\\userId, type, isRead};
+\node[clsbox] (user) at (-4.6,1.9) {\textbf{User}\\id, name, email, role};
+\node[clsbox] (course) at (-1.0,1.9) {\textbf{Course}\\id, code, name};
+\node[clsbox] (topic) at (2.6,1.9) {\textbf{Topic}\\id, title, courseId};
+\node[clsbox] (material) at (6.2,1.9) {\textbf{Material}\\id, topicId, type};
+\node[clsbox] (enroll) at (-1.0,0.3) {\textbf{Enrollment}\\userId, courseId};
+\node[clsbox] (thread) at (2.6,0.3) {\textbf{Thread}\\courseId, creatorId};
+\node[clsbox] (notification) at (6.2,0.3) {\textbf{Notification}\\userId, isRead};
+\node[clsbox] (progress) at (2.6,-1.3) {\textbf{TopicProgress}\\userId, topicId};
 
-\draw[rel] (user)     -- (enroll);
-\draw[rel] (course)   -- (enroll);
-\draw[rel] (course)   -- (topic);
-\draw[rel] (topic)    -- (material);
-\draw[rel] (material) -- (embed);
-\draw[rel] (user)     -- (progress);
-\draw[rel] (topic)    -- (progress);
-\draw[rel] (user)     -- (llmcall);
-\draw[rel] (course)   -- (thread);
-\draw[rel] (user)     -- (thread);
-\draw[rel] (user)     -- (notif);
+\draw[rel] (user) -- (enroll);
+\draw[rel] (course) -- (enroll);
+\draw[rel] (course) -- (topic);
+\draw[rel] (topic) -- (material);
+\draw[rel] (user) -- (thread);
+\draw[rel] (course) -- (thread);
+\draw[rel] (user) -- (notification);
+\draw[rel] (user) -- (progress);
+\draw[rel] (topic) -- (progress);
 \end{tikzpicture}
-\caption{UML Class Diagram of Core Models (abridged from 14-table schema)}
-\label{fig:classdiag}
+}
+\caption{High level class relationship diagram for core entities.}
+\label{fig:class-diagram}
 \end{figure}
 
-\section{Entity Relationship Diagram}
-Figure~\ref{fig:erdetail} captures the high-impact entity relationships. The full schema contains 14 tables; the diagram focuses on the entities central to AI tutoring and RAG.
-
-\begin{figure}[H]
+\section{ER Diagram (Conceptual)}
+\begin{figure}[htbp]
 \centering
+\resizebox{0.86\textwidth}{!}{%
 \begin{tikzpicture}[
-    ent/.style={draw, rectangle, align=center, minimum width=2.4cm, minimum height=7mm, fill=cyan!10, font=\small},
-    link/.style={-{Stealth}, thick}
+    ent/.style={draw, rectangle, align=center, minimum width=2.7cm, minimum height=8mm, fill=cyan!10},
+    rel/.style={-{Stealth}, thick}
 ]
-\node[ent] (u)  at (-5.0, 2.0) {User};
-\node[ent] (c)  at (-1.8, 2.0) {Course};
-\node[ent] (e)  at ( 1.8, 2.0) {Enrollment};
-\node[ent] (t)  at (-1.8, 0.4) {Topic};
-\node[ent] (m)  at ( 1.8, 0.4) {Material};
-\node[ent] (em) at ( 1.8,-1.2) {Embedding};
-\node[ent] (tp) at (-5.0, 0.4) {TopicProgress};
-\node[ent] (th) at (-1.8,-1.2) {Thread};
-\node[ent] (lc) at (-5.0,-1.2) {LlmCall};
-\node[ent] (n)  at ( 4.5,-1.2) {Notification};
-\node[ent] (qb) at ( 4.5, 0.4) {QuestionBank};
+\node[ent] (u)  at (-5.2, 2.2) {User};
+\node[ent] (c)  at (-1.5, 2.2) {Course};
+\node[ent] (e)  at ( 2.2, 2.2) {Enrollment};
+\node[ent] (t)  at (-1.5, 0.6) {Topic};
+\node[ent] (m)  at ( 2.2, 0.6) {Material};
+\node[ent] (tp) at (-5.2, 0.6) {TopicProgress};
+\node[ent] (th) at (-1.5,-1.0) {Thread};
+\node[ent] (nt) at ( 2.2,-1.0) {Notification};
 
-\draw[link] (u)  -- node[above,font=\scriptsize]{enrolls} (e);
-\draw[link] (c)  -- node[above,font=\scriptsize]{} (e);
-\draw[link] (c)  -- node[right,font=\scriptsize]{1..*} (t);
-\draw[link] (t)  -- node[above,font=\scriptsize]{1..*} (m);
-\draw[link] (m)  -- node[right,font=\scriptsize]{chunks} (em);
-\draw[link] (u)  -- (tp);
-\draw[link] (t)  -- (tp);
-\draw[link] (u)  -- (lc);
-\draw[link] (c)  -- (th);
-\draw[link] (t)  -- (qb);
-\draw[link] (u)  -- (n);
+\draw[rel] (u) -- node[above, font=\scriptsize]{enrolls} (e);
+\draw[rel] (c) -- node[above, font=\scriptsize]{has} (e);
+\draw[rel] (c) -- node[left,  font=\scriptsize]{has} (t);
+\draw[rel] (t) -- node[above, font=\scriptsize]{contains} (m);
+\draw[rel] (u) -- node[left,  font=\scriptsize]{tracks} (tp);
+\draw[rel] (t) -- node[above, font=\scriptsize]{for} (tp);
+\draw[rel] (u) -- node[below, font=\scriptsize]{creates} (th);
+\draw[rel] (c) -- node[right, font=\scriptsize]{context} (th);
+\draw[rel] (u) -- node[below, font=\scriptsize]{receives} (nt);
 \end{tikzpicture}
-\caption{ER Diagram of Main Entities. \texttt{Embedding} stores 768-dim vectors and \texttt{tsvector} for hybrid RAG retrieval.}
-\label{fig:erdetail}
+}
+\caption{Conceptual ER diagram of the main project core tables.}
+\label{fig:er-diagram}
 \end{figure}
+\section{Module Interaction Flow}
+At run time the project has a uniform flow:
+\begin{enumerate}[label=\arabic*.]
+	\item API requests are made from the frontend pages.
+	\item API validates data against schemas.
+	\item Services enforce business rules and authentication.
+	\item Data layer saves and returns normalized data.
+	\item Frontend is kept in-sync with query cache and real-time updates.
+\end{enumerate}
 
-\section{Activity Diagram: Authentication Workflow}
-\begin{figure}[H]
+\begin{figure}[htbp]
 \centering
+\resizebox{0.96\textwidth}{!}{%
 \begin{tikzpicture}[
-    node distance=8mm,
-    flowstep/.style={draw, rounded corners, align=center, minimum width=3.6cm, minimum height=8mm, fill=blue!7, font=\small},
-    decision/.style={diamond, draw, align=center, minimum width=2.3cm, minimum height=8mm, fill=orange!10, font=\small},
+    node distance=8mm and 10mm,
+    flowstep/.style={draw, rounded corners, align=center, minimum width=3.0cm, minimum height=8mm, fill=blue!8},
     arr/.style={-{Stealth}, thick}
 ]
-\node[flowstep] (s1) {User submits credentials};
-\node[flowstep, below=of s1] (s2) {Zod schema validation};
-\node[decision, below=of s2, yshift=-2mm] (d1) {Valid?};
-\node[flowstep, below left=of d1, xshift=-10mm] (s3) {Return 400};
-\node[flowstep, below right=of d1, xshift=10mm] (s4) {Bcrypt password verify};
-\node[decision, below=of s4, yshift=-2mm] (d2) {Match?};
-\node[flowstep, below left=of d2, xshift=-8mm] (s5) {Return 401};
-\node[flowstep, below right=of d2, xshift=8mm] (s6) {Issue JWT + refresh token};
-\node[flowstep, below=of s6] (s7) {Return authenticated user + profile};
+\node[flowstep] (s1) {User Interaction\\(Page action)};
+\node[flowstep, right=of s1] (s2) {API Request\\(HTTP call)};
+\node[flowstep, right=of s2] (s3) {Validation + Auth\\(Backend checks)};
+\node[flowstep, right=of s3] (s4) {Service Logic\\(CRUD rules)};
+\node[flowstep, right=of s4] (s5) {Database Update\\or Query Result};
 
 \draw[arr] (s1) -- (s2);
-\draw[arr] (s2) -- (d1);
-\draw[arr] (d1) -- node[above,font=\scriptsize]{No}  (s3);
-\draw[arr] (d1) -- node[above,font=\scriptsize]{Yes} (s4);
-\draw[arr] (s4) -- (d2);
-\draw[arr] (d2) -- node[above,font=\scriptsize]{No}  (s5);
-\draw[arr] (d2) -- node[above,font=\scriptsize]{Yes} (s6);
-\draw[arr] (s6) -- (s7);
+\draw[arr] (s2) -- (s3);
+\draw[arr] (s3) -- (s4);
+\draw[arr] (s4) -- (s5);
+\draw[arr, dashed] (s5.south) to[out=-90, in=-90] node[below, font=\scriptsize] {normalized response + cache refresh} (s1.south);
 \end{tikzpicture}
-\caption{Activity Diagram for Authentication Flow (JWT access + refresh token pattern)}
-\label{fig:auth}
+}
+\caption{End to end interaction flow from user action to synchronized UI state.}
+\label{fig:module-flow}
 \end{figure}
 
-\section{Activity Diagram: Material Ingest and RAG Pipeline}
-\begin{figure}[H]
+\section{Activity Diagram (Authentication Flow)}
+\begin{figure}[htbp]
 \centering
+\resizebox{0.82\textwidth}{!}{%
 \begin{tikzpicture}[
-    node distance=7mm,
-    flowstep/.style={draw, rounded corners, align=center, minimum width=3.9cm, minimum height=8mm, fill=green!8, font=\small},
-    decision/.style={diamond, draw, align=center, minimum width=2.5cm, minimum height=8mm, fill=orange!8, font=\small},
+    node distance=8mm,
+    activity/.style={draw, rounded corners, align=center, minimum width=3.5cm, minimum height=8mm, fill=purple!10},
+    decision/.style={diamond, draw, align=center, minimum width=2.1cm, minimum height=8mm, fill=yellow!15},
     arr/.style={-{Stealth}, thick}
 ]
-\node[flowstep] (u1) {Instructor uploads material (PDF/image)};
-\node[flowstep, below=of u1] (u2) {Enqueue \texttt{ingestQueue} job (BullMQ)};
-\node[decision, below=of u2, yshift=-2mm] (d1) {quality?};
-\node[flowstep, below left=12mm and 14mm of d1] (ocr1) {Tesseract (fast)};
-\node[flowstep, below right=12mm and 14mm of d1] (ocr2) {Sidecar: TrOCR / Nougat};
-\node[flowstep, below=16mm of d1] (chunk) {Paragraph chunker\\(800 tok, 150 overlap)};
-\node[flowstep, below=of chunk] (embed) {nomic-embed-text\\(batches of 16)};
-\node[flowstep, below=of embed] (store) {Bulk insert: \texttt{vector(768)} + \texttt{tsvector}};
-\node[flowstep, below=of store] (done) {Material marked \texttt{DONE}; HNSW index updated};
+\node[activity] (a1) {User submits credentials};
+\node[activity, below=of a1] (a2) {Request validation};
+\node[decision, below=of a2, yshift=-1mm] (d1) {Valid?};
+\node[activity, below left=of d1, xshift=-8mm] (a3) {Return error};
+\node[activity, below right=of d1, xshift=8mm] (a4) {Verify user + password};
+\node[decision, below=of a4, yshift=-1mm] (d2) {Authorized?};
+\node[activity, below left=of d2, xshift=-8mm] (a5) {Return unauthorized};
+\node[activity, below right=of d2, xshift=8mm] (a6) {Issue token + response};
 
-\draw[arr] (u1) -- (u2);
-\draw[arr] (u2) -- (d1);
-\draw[arr] (d1) -- node[above,font=\scriptsize]{fast}     (ocr1);
-\draw[arr] (d1) -- node[above,font=\scriptsize]{accurate} (ocr2);
-\draw[arr] (ocr1) -- ++(0,-12mm) -| (chunk);
-\draw[arr] (ocr2) -- ++(0,-12mm) -| (chunk);
-\draw[arr] (chunk) -- (embed);
-\draw[arr] (embed) -- (store);
-\draw[arr] (store) -- (done);
+\draw[arr] (a1) -- (a2);
+\draw[arr] (a2) -- (d1);
+\draw[arr] (d1) -- node[above, font=\scriptsize]{No} (a3);
+\draw[arr] (d1) -- node[above, font=\scriptsize]{Yes} (a4);
+\draw[arr] (a4) -- (d2);
+\draw[arr] (d2) -- node[above, font=\scriptsize]{No} (a5);
+\draw[arr] (d2) -- node[above, font=\scriptsize]{Yes} (a6);
 \end{tikzpicture}
-\caption{Activity Diagram for Material Ingest and RAG Embedding Pipeline}
-\label{fig:ingest}
+}
+\caption{Activity diagram for the authentication request lifecycle.}
+\label{fig:activity-auth}
 \end{figure}
 
-\section{Sequence Diagram: RAG Ask-Course Workflow}
-\begin{figure}[H]
-\centering
-\begin{tikzpicture}[x=1.05cm,y=0.95cm, font=\small]
-% Lifelines
-\draw[thick] (0,0) -- (0,-7.5) node[below] {Student};
-\draw[thick] (3,0) -- (3,-7.5) node[below] {Frontend};
-\draw[thick] (6,0) -- (6,-7.5) node[below] {Backend};
-\draw[thick] (9,0) -- (9,-7.5) node[below] {pgvector};
-\draw[thick] (12,0) -- (12,-7.5) node[below] {Ollama};
+\section{AI Tutor Methodology}
+The AI Tutor is integrated as a module of the LMS rather than a separate chatbot. It supports multiple learning modes
+through a shared workspace and course/topic context. Retrieval based answering and quiz workflows are connected with
+existing course entities so interactions remain academically relevant.
 
-% Messages
-\draw[-{Stealth}] (0,-0.6) -- (3,-0.6)  node[midway,above,font=\scriptsize] {Ask question};
-\draw[-{Stealth}] (3,-1.2) -- (6,-1.2)  node[midway,above,font=\scriptsize] {POST /ask-course (SSE)};
-\draw[-{Stealth}] (6,-1.8) -- (9,-1.8)  node[midway,above,font=\scriptsize] {BM25 + cosine (top-20 each)};
-\draw[-{Stealth}] (9,-2.4) -- (6,-2.4)  node[midway,above,font=\scriptsize] {40 chunk candidates};
-\draw[-{Stealth}] (6,-3.0) -- (6,-3.0); % self (RRF)
-\node[right,font=\scriptsize] at (6,-3.0) {RRF fusion → top-8 chunks};
-\draw[-{Stealth}] (6,-3.6) -- (12,-3.6) node[midway,above,font=\scriptsize] {Prompt + context chunks};
-\draw[-{Stealth},dashed] (12,-4.2) -- (6,-4.2) node[midway,above,font=\scriptsize] {token stream (SSE)};
-\draw[-{Stealth},dashed] (6,-4.8) -- (3,-4.8)  node[midway,above,font=\scriptsize] {event: token};
-\draw[-{Stealth},dashed] (3,-5.4) -- (0,-5.4)  node[midway,above,font=\scriptsize] {incremental render};
-\draw[-{Stealth}] (6,-6.0) -- (3,-6.0)  node[midway,above,font=\scriptsize] {event: citations};
-\draw[-{Stealth}] (3,-6.6) -- (0,-6.6)  node[midway,above,font=\scriptsize] {Citation chips displayed};
+\section{Sequence Diagram (AI Tutor Request)}
+\begin{figure}[htbp]
+\centering
+\resizebox{0.92\textwidth}{!}{%
+\begin{tikzpicture}[x=1.05cm,y=0.9cm, font=\small]
+\draw[thick] (0,0) -- (0,-5.8) node[below] {User};
+\draw[thick] (3,0) -- (3,-5.8) node[below] {Frontend};
+\draw[thick] (6,0) -- (6,-5.8) node[below] {Backend};
+\draw[thick] (9,0) -- (9,-5.8) node[below] {AI Service};
+\draw[thick] (12,0) -- (12,-5.8) node[below] {Database};
+
+\draw[-{Stealth}] (0,-0.7) -- (3,-0.7) node[midway,above,font=\scriptsize] {Ask question};
+\draw[-{Stealth}] (3,-1.3) -- (6,-1.3) node[midway,above,font=\scriptsize] {POST /ai-tutor/...};
+\draw[-{Stealth}] (6,-1.9) -- (12,-1.9) node[midway,above,font=\scriptsize] {Fetch context};
+\draw[-{Stealth}] (12,-2.5) -- (6,-2.5) node[midway,above,font=\scriptsize] {Context result};
+\draw[-{Stealth}] (6,-3.1) -- (9,-3.1) node[midway,above,font=\scriptsize] {Generate response};
+\draw[-{Stealth}, dashed] (9,-3.7) -- (6,-3.7) node[midway,above,font=\scriptsize] {Stream tokens};
+\draw[-{Stealth}, dashed] (6,-4.3) -- (3,-4.3) node[midway,above,font=\scriptsize] {API stream};
+\draw[-{Stealth}, dashed] (3,-4.9) -- (0,-4.9) node[midway,above,font=\scriptsize] {Render reply};
 \end{tikzpicture}
-\caption{Sequence Diagram of RAG Ask-Course Workflow with SSE Streaming and Citation Frame}
-\label{fig:seq-rag}
+}
+\caption{Sequence diagram for AI Tutor request and response flow.}
+\label{fig:sequence-ai-tutor}
 \end{figure}
 
-\section{Sequence Diagram: AI Quiz Generation and Submission}
-\begin{figure}[H]
-\centering
-\begin{tikzpicture}[x=1.05cm,y=0.95cm, font=\small]
-\draw[thick] (0,0) -- (0,-6.5) node[below] {Student};
-\draw[thick] (3,0) -- (3,-6.5) node[below] {Frontend};
-\draw[thick] (6,0) -- (6,-6.5) node[below] {Backend};
-\draw[thick] (9,0) -- (9,-6.5) node[below] {Ollama};
-\draw[thick] (12,0) -- (12,-6.5) node[below] {PostgreSQL};
+\section{Asynchronous Processing Methodology}
+For tasks that can be expensive (e.g., material ingestion and OCR), asynchronous worker execution is used. This prevents
+HTTP request blocking, improves responsiveness, and allows safer retry and failure handling patterns.
 
-\draw[-{Stealth}] (0,-0.6)  -- (3,-0.6)  node[midway,above,font=\scriptsize] {Request quiz};
-\draw[-{Stealth}] (3,-1.2)  -- (6,-1.2)  node[midway,above,font=\scriptsize] {POST /generate-quiz};
-\draw[-{Stealth}] (6,-1.8)  -- (9,-1.8)  node[midway,above,font=\scriptsize] {JSON-schema prompt (format:json)};
-\draw[-{Stealth}] (9,-2.4)  -- (6,-2.4)  node[midway,above,font=\scriptsize] {Structured MCQ JSON};
-\draw[-{Stealth}] (6,-3.0)  -- (3,-3.0)  node[midway,above,font=\scriptsize] {Quiz payload};
-\draw[-{Stealth}] (3,-3.6)  -- (0,-3.6)  node[midway,above,font=\scriptsize] {Render quiz};
-\draw[-{Stealth}] (0,-4.2)  -- (3,-4.2)  node[midway,above,font=\scriptsize] {Submit answers};
-\draw[-{Stealth}] (3,-4.8)  -- (6,-4.8)  node[midway,above,font=\scriptsize] {POST /submit-quiz};
-\draw[-{Stealth}] (6,-5.4)  -- (12,-5.4) node[midway,above,font=\scriptsize] {Save ExamAttempt; update $\alpha$, $\beta$};
-\draw[-{Stealth}] (12,-6.0) -- (6,-6.0)  node[midway,above,font=\scriptsize] {Posterior mean + 95\% CI};
-\draw[-{Stealth}] (6,-6.0)  -- (3,-6.0); % already drawn to right of backend
-\draw[-{Stealth}] (6,-6.5)  -- (3,-6.5)  node[midway,above,font=\scriptsize] {};
+\begin{figure}[htbp]
+\centering
+\resizebox{0.88\textwidth}{!}{%
+\begin{tikzpicture}[
+    node distance=9mm and 12mm,
+    n/.style={draw, rounded corners, align=center, minimum width=3.1cm, minimum height=8mm, fill=green!8},
+    q/.style={draw, rounded corners, align=center, minimum width=3.1cm, minimum height=8mm, fill=orange!10},
+    arr/.style={-{Stealth}, thick}
+]
+\node[n] (req) {User Upload / Action};
+\node[q, right=of req] (enqueue) {Enqueue Background Job};
+\node[n, right=of enqueue] (worker) {Worker Processing};
+\node[n, below=of worker] (store) {Persist Result / Status};
+\node[n, left=of store] (notify) {Notify UI Refresh};
+
+\draw[arr] (req) -- (enqueue);
+\draw[arr] (enqueue) -- (worker);
+\draw[arr] (worker) -- (store);
+\draw[arr] (store) -- (notify);
+\draw[arr, dashed] (notify) -- (req);
 \end{tikzpicture}
-\caption{Sequence Diagram of AI Quiz Workflow with Bayesian Posterior Return}
-\label{fig:seq-quiz}
+}
+\caption{Asynchronous job flow used for heavy operations.}
+\label{fig:async-flow}
+\end{figure}
+
+\section{Component Diagram}
+\begin{figure}[htbp]
+\centering
+\resizebox{0.78\textwidth}{!}{%
+\begin{tikzpicture}[
+    node distance=9mm,
+    comp/.style={draw, rounded corners, align=center, minimum width=4.6cm, minimum height=8mm, fill=gray!15},
+    arr/.style={-{Stealth}, thick}
+]
+\node[comp, fill=blue!10] (web) {Web Client Components};
+\node[comp, fill=green!10, below=of web] (api) {API Router Components};
+\node[comp, fill=orange!12, below=of api] (service) {Domain Service Components};
+\node[comp, fill=purple!10, below left=8mm and 7mm of service] (worker) {Worker Components};
+\node[comp, fill=cyan!10, below right=8mm and 7mm of service] (data) {Database Components};
+\node[comp, fill=yellow!15, left=of api, xshift=-16mm] (socket) {Realtime Socket Components};
+
+\draw[arr] (web) -- (api);
+\draw[arr] (api) -- (service);
+\draw[arr] (service) -- (worker);
+\draw[arr] (service) -- (data);
+\draw[arr] (socket) -- (api);
+\draw[arr, dashed] (worker) -- (data);
+\draw[arr, dashed] (data) to[bend left=15] (api);
+\end{tikzpicture}
+}
+\caption{Component level view of the major software blocks with interaction paths.}
+\label{fig:component-diagram}
 \end{figure}
 
 \section{Deployment Diagram}
-\begin{figure}[H]
+\begin{figure}[htbp]
 \centering
+\resizebox{0.92\textwidth}{!}{%
 \begin{tikzpicture}[
-    n/.style={draw, rounded corners, align=center, minimum width=2.9cm, minimum height=9mm, fill=purple!8, font=\small},
+    nodebox/.style={draw, rounded corners, align=center, minimum width=3.0cm, minimum height=9mm, fill=green!8},
     arr/.style={-{Stealth}, thick}
 ]
-\node[n] (browser) at (0,   3.6)  {User Browser\\(React SPA)};
-\node[n] (nginx)   at (0,   2.2)  {Nginx\\(SPA + SSE proxy)};
-\node[n] (api)     at (0,   0.8)  {Node.js Backend\\(Express, port 3001)};
-\node[n] (pg)      at (-3.8,-1.0) {pgvector:pg15\\(port 5433)};
-\node[n] (rd)      at ( 0,  -1.0) {Redis 7\\(port 6379)};
-\node[n] (ol)      at ( 3.8,-1.0) {Ollama\\(port 11434)};
-\node[n] (sc)      at (-3.8,-2.6) {AI Sidecar\\(Python FastAPI, port 8001)};
+\node[nodebox] (browser) at (0,2.5) {User Browser};
+\node[nodebox] (frontend) at (3.8,2.5) {Frontend App};
+\node[nodebox] (backend) at (7.6,2.5) {Backend API};
+\node[nodebox] (postgres) at (7.6,1.0) {PostgreSQL};
+\node[nodebox] (redis) at (11.2,1.0) {Redis};
+\node[nodebox] (ai) at (11.2,2.5) {AI Runtime / Workers};
 
-\draw[arr] (browser) -- (nginx);
-\draw[arr] (nginx)   -- (api);
-\draw[arr] (api)     -- (pg);
-\draw[arr] (api)     -- (rd);
-\draw[arr] (api)     -- (ol);
-\draw[arr] (api)     -- (sc);
-\draw[arr] (sc)      -- (ol);
+\draw[arr] (browser) -- (frontend);
+\draw[arr] (frontend) -- (backend);
+\draw[arr] (backend) -- (postgres);
+\draw[arr] (backend) -- (redis);
+\draw[arr] (backend) -- (ai);
+\draw[arr, dashed] (ai) -- (redis);
 \end{tikzpicture}
-\caption{Deployment Diagram for Local/Development Environment. \texttt{pgvector:pg15} provides vector similarity search alongside standard SQL.}
-\label{fig:deploy}
+}
+\caption{Deployment diagram for local/full-stack runtime setup.}
+\label{fig:deployment-diagram}
 \end{figure}
 
-\section{RAG Pipeline}
-\label{sec:rag}
-The retrieval-augmented generation pipeline operates in two phases: offline ingestion and online query.
-
-\begin{figure}[H]
+\section{Data Flow Diagram}
+\begin{figure}[htbp]
 \centering
+\resizebox{0.92\textwidth}{!}{%
 \begin{tikzpicture}[
-    node distance=5mm and 7mm,
-    stage/.style={draw, rounded corners, align=center, minimum width=2.5cm, minimum height=8mm, fill=blue!8, font=\small},
-    stageG/.style={draw, rounded corners, align=center, minimum width=2.5cm, minimum height=8mm, fill=green!10, font=\small},
-    stageO/.style={draw, rounded corners, align=center, minimum width=2.5cm, minimum height=8mm, fill=orange!10, font=\small},
+    ext/.style={draw, rounded corners, align=center, minimum width=2.3cm, minimum height=7mm, fill=blue!10},
+    proc/.style={draw, ellipse, align=center, minimum width=2.6cm, minimum height=9mm, fill=orange!12},
+    store/.style={draw, rectangle, align=center, minimum width=2.8cm, minimum height=7mm, fill=green!10},
     arr/.style={-{Stealth}, thick}
 ]
-% Ingestion row
-\node[stage]  (upload)  {Upload};
-\node[stage,  right=of upload]  (extract) {Extract\\(OCR)};
-\node[stage,  right=of extract] (chunk)   {Chunk\\800\,tok};
-\node[stage,  right=of chunk]   (embed)   {Embed\\nomic-768};
-\node[stageG, right=of embed]   (store)   {pgvector\\+ tsvector};
+\node[ext] (student) at (0,1.8) {Student / Tutor};
+\node[proc] (frontend) at (3.4,1.8) {Frontend Process};
+\node[proc] (api) at (6.8,1.8) {Backend Process};
+\node[store] (db) at (10.2,2.5) {PostgreSQL Store};
+\node[store] (cache) at (10.2,1.1) {Redis / Queue Store};
+\node[proc] (worker) at (6.8,0.4) {Worker Process};
 
-% Query row
-\node[stageG, below=16mm of upload]  (q)    {User query};
-\node[stage,  right=of q]    (bm25) {BM25\\top-20};
-\node[stage,  right=of bm25] (cos)  {Cosine\\top-20};
-\node[stage,  right=of cos]  (rrf)  {RRF\\$K=60$};
-\node[stageO, right=of rrf]  (gen)  {Qwen2.5\\stream + cites};
-
-% Ingestion arrows
-\draw[arr] (upload)  -- (extract);
-\draw[arr] (extract) -- (chunk);
-\draw[arr] (chunk)   -- (embed);
-\draw[arr] (embed)   -- (store);
-
-% Query arrows
-\draw[arr] (q)    -- (bm25);
-\draw[arr] (q)    -- (cos);
-\draw[arr] (bm25) -- (rrf);
-\draw[arr] (cos)  -- (rrf);
-\draw[arr] (rrf)  -- (gen);
-
-% Cross arrows from store to retrieval
-\draw[arr, dashed] (store.south) -- ++(0,-4mm) -| (bm25.north);
-\draw[arr, dashed] (store.south) -- ++(0,-4mm) -| (cos.north);
+\draw[arr] (student) -- node[above, font=\scriptsize]{inputs} (frontend);
+\draw[arr] (frontend) -- node[above, font=\scriptsize]{requests} (api);
+\draw[arr] (api) -- node[above, font=\scriptsize]{CRUD} (db);
+\draw[arr] (api) -- node[below, font=\scriptsize]{enqueue} (cache);
+\draw[arr] (cache) -- (worker);
+\draw[arr] (worker) -- (db);
+\draw[arr, dashed] (api) to[bend left=20] node[below, font=\scriptsize]{responses} (frontend);
 \end{tikzpicture}
-\caption{RAG pipeline. Top row (ingestion): material upload triggers a BullMQ worker that extracts, chunks, embeds, and stores into both pgvector and \texttt{tsvector}. Bottom row (query): BM25 and cosine retrieval run in parallel; Reciprocal Rank Fusion selects the top-8 chunks for grounded generation.}
-\label{fig:rag}
+}
+\caption{Data flow diagram showing request, processing, and persistence paths.}
+\label{fig:data-flow-diagram}
 \end{figure}
 
-Ingestion runs as a BullMQ job so uploads never block the HTTP thread. Chunks are packed greedily up to 800 tokens with 150-token overlap; PDF chunks never cross page boundaries, which is what allows the answer layer to emit precise page-number citations. Embeddings are batched in groups of sixteen and written via raw SQL because Prisma cannot parameterise \texttt{vector(768)} columns.
-
-For retrieval, BM25 top-20 and cosine top-20 run in parallel, then Reciprocal Rank Fusion with $K=60$ combines the ranks before selecting the top-8 context chunks. An optional cross-encoder re-rank stage is feature-flagged behind \texttt{ENABLE\_CROSS\_ENCODER} and disabled by default because BM25+cosine+RRF already achieves recall@5 above the 0.80 project target.
-
-\section{Advanced OCR Sidecar}
-\label{sec:ocr}
-To keep the heavy Python machine-learning stack out of the Node.js backend, all advanced OCR runs in a separate FastAPI container. The backend's \texttt{extractTextFromFile} function accepts a \texttt{quality} parameter: \texttt{fast} runs Tesseract locally; \texttt{accurate} delegates to the sidecar via \texttt{undici}. A BullMQ \texttt{ocr.worker} guarantees slow inferences never starve request handlers.
-
-\begin{figure}[H]
-\centering
-\begin{tikzpicture}[
-    node distance=6mm and 10mm,
-    n/.style={draw, rounded corners, align=center, minimum width=2.7cm, minimum height=8mm, fill=blue!8, font=\small},
-    sc/.style={draw, rounded corners, align=center, minimum width=2.9cm, minimum height=8mm, fill=orange!10, font=\small},
-    arr/.style={-{Stealth}, thick}
-]
-\node[n]  (upload)  {Material upload};
-\node[n,  right=of upload]  (backend) {Backend\\extractTextFromFile};
-\node[n,  below=of backend] (fast)    {Tesseract\,/\,pdf-parse};
-\node[sc, right=of backend] (mux)     {AI Sidecar\\(FastAPI)};
-\node[sc, above right=8mm and 8mm of mux]  (trocr)  {TrOCR\\(handwriting)};
-\node[sc, right=8mm of mux]               (nougat) {Nougat\\(academic PDF)};
-\node[sc, below right=8mm and 8mm of mux] (layout) {Unstructured\\(layout)};
-
-\draw[arr] (upload)  -- node[above,font=\scriptsize]{quality} (backend);
-\draw[arr] (backend) -- node[right,font=\scriptsize]{fast}    (fast);
-\draw[arr] (backend) -- node[above,font=\scriptsize]{accurate}(mux);
-\draw[arr] (mux)     -- (trocr);
-\draw[arr] (mux)     -- (nougat);
-\draw[arr] (mux)     -- (layout);
-\draw[arr, dashed] (mux.south) to[bend right=25]
-    node[below,font=\scriptsize]{fallback on error} (fast.east);
-\end{tikzpicture}
-\caption{OCR dispatch. The accurate path calls the Python FastAPI sidecar; on sidecar failure the backend falls back to the fast path preserving availability.}
-\label{fig:ocr}
-\end{figure}
-
-\section{Agent ReAct Loop}
-\label{sec:agent}
-The chat controller delegates to a ReAct loop \cite{yao2023react} that alternates \emph{thought}, \emph{tool call}, and \emph{tool result} blocks before committing to a final answer. The loop is bounded at five iterations and twelve seconds wall-clock; every step is logged to \texttt{LlmCall} with a shared \texttt{parentCallId} so the instructor dashboard can reconstruct the full agent trace.
-
-\begin{figure}[H]
-\centering
-\begin{tikzpicture}[
-    node distance=7mm and 9mm,
-    n/.style={draw, rounded corners, align=center, minimum width=2.6cm, minimum height=8mm, fill=blue!8, font=\small},
-    t/.style={n, fill=green!10},
-    arr/.style={-{Stealth}, thick}
-]
-\node[n] (input)  {User message};
-\node[n, right=of input]  (select) {Strategy\\selector};
-\node[n, right=of select] (plan)   {Thought};
-\node[n, right=of plan]   (decide) {Decide};
-\node[t, below=14mm of decide, xshift=-30mm] (tool1) {retrieve\_material};
-\node[t, below=14mm of decide, xshift=0mm]   (tool2) {search\_web};
-\node[t, below=14mm of decide, xshift=30mm]  (tool3) {render\_diagram};
-\node[t, below=28mm of decide, xshift=-15mm] (tool4) {run\_code};
-\node[t, below=28mm of decide, xshift=15mm]  (tool5) {generate\_practice\_question};
-\node[n, right=18mm of decide] (ans) {Final answer\\(stream + cites)};
-
-\draw[arr] (input)  -- (select);
-\draw[arr] (select) -- (plan);
-\draw[arr] (plan)   -- (decide);
-\draw[arr] (decide) -- (tool1);
-\draw[arr] (decide) -- (tool2);
-\draw[arr] (decide) -- (tool3);
-\draw[arr] (decide) -- (tool4);
-\draw[arr] (decide) -- (tool5);
-\draw[arr] (tool2.east) to[bend left=20] (plan.south);
-\draw[arr] (decide.north) to[bend left=15]
-    node[above,font=\scriptsize]{done} (ans.north);
-\end{tikzpicture}
-\caption{ReAct loop with deterministic strategy selection and five tools. The strategy selector uses the student's Beta-posterior mean to bias toward Socratic probing when mastery is low.}
-\label{fig:react}
-\end{figure}
-
-\noindent\textbf{Strategy selection rules} (highest-priority first):
-\begin{enumerate}[label=\arabic*.,nosep]
-    \item Detected confusion keyword (``I don't understand'', ``I'm lost'') $\Rightarrow$ \textsc{Socratic}
-    \item Explicit worked-example request $\Rightarrow$ \textsc{Worked Example}
-    \item Explicit explanation request $\Rightarrow$ \textsc{Explain}
-    \item Posterior mean $< 0.4$ on active topic $\Rightarrow$ \textsc{Socratic}
-    \item Posterior mean $> 0.75$ on active topic $\Rightarrow$ \textsc{Hint Ladder}
-    \item Default $\Rightarrow$ \textsc{Explain}
-\end{enumerate}
-
-\section{Bayesian Mastery Model}
-\label{sec:mastery}
-Each (student, topic) pair carries a conjugate $\mathrm{Beta}(\alpha,\beta)$ posterior with uniform prior $\alpha=\beta=1$. Quiz submission updates the hyperparameters as:
-\[
-\alpha \leftarrow \alpha + N_{\text{correct}}, \qquad
-\beta  \leftarrow \beta  + N_{\text{incorrect}}.
-\]
-The posterior mean is $\mathbb{E}[\theta] = \alpha/(\alpha+\beta)$; the 95\% credible interval uses the normal approximation:
-\[
-\mu \pm 1.96\sqrt{\frac{\alpha\beta}{(\alpha+\beta)^{2}(\alpha+\beta+1)}}.
-\]
-We adopt the uniform prior so a student who has answered nothing has mean $0.5$ and maximal uncertainty, which avoids the cold-start over-confidence visible in the previous $+0.1/-0.05$ rule. Adaptive difficulty targeting uses the posterior mean to select the next quiz difficulty: $d = \operatorname{clip}(\lceil 1 + 4\mu \rceil, 1, 5)$.
-
-\section{Real-Time Notification Architecture}
-Socket.IO is used for push notifications. The backend authenticates each Socket.IO connection with JWT, then places the socket into a room keyed by \texttt{user:\$\{userId\}}. When \texttt{createNotification} is called (from any service), it persists the row in the \texttt{Notification} table, then emits \texttt{notification:new} and \texttt{notification:count} events to the user's room. The frontend hook \texttt{useNotificationSocket} subscribes to these events and updates the TanStack Query cache in-place, so the bell badge and feed update instantly without polling.
-
-\section{Methodology Summary}
-The final methodology balances synchronous learning interactions (chat, RAG Q\&A, quiz) with asynchronous reliability features (ingestion worker, OCR worker, notification worker). Each sub-system has a deliberate degraded-mode out: fast-path OCR when the sidecar is unavailable; BM25-only retrieval when embeddings have not yet completed; and Tesseract on Nougat failure. This design trades some peak accuracy for predictable response times and high availability under CPU-only hardware constraints.
+\section{Conclusion}
+The general approach is implementation focused and system focused: design and implement each module with contracts, keep role
+and validation rules clear, and connect all modules with stable interfaces so that key academic processes work
+consistently end to end.

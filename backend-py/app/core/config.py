@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     SMTP_USER: str | None = None
     SMTP_PASS: str | None = None
     SMTP_FROM: str = "noreply@cognitivecopilot.com"
+    SMTP_USE_TLS: bool = True
+    FRONTEND_URL: str = "http://localhost:5173"
+    GOOGLE_CLIENT_ID: str | None = None
+    GOOGLE_CLIENT_SECRET: str | None = None
+    GOOGLE_REDIRECT_URI: str | None = None
 
     @property
     def async_database_url(self) -> str:

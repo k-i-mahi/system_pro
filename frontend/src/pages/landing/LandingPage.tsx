@@ -2,7 +2,6 @@ import { Link, Navigate } from 'react-router-dom';
 import {
   BookOpen,
   Brain,
-  FileQuestion,
   Gauge,
   GitBranch,
   Globe,
@@ -36,11 +35,6 @@ const FEATURES = [
     icon: Gauge,
     title: 'Bayesian mastery tracking',
     body: 'Per-topic Beta posterior replaces the naive +0.1/−0.05 rule. Your 95% credible interval tells you exactly how uncertain your score is.',
-  },
-  {
-    icon: FileQuestion,
-    title: 'Adaptive-difficulty quiz',
-    body: 'Quiz difficulty targets your current posterior mean. JSON-schema constrained generation gives zero parse failures across hundreds of runs.',
   },
   {
     icon: Globe,
@@ -85,7 +79,7 @@ const TECH = [
 
 const STATS = [
   { value: '14', label: 'DB models' },
-  { value: '5', label: 'tutor modes' },
+  { value: '4', label: 'tutor modes' },
   { value: '768', label: 'dim embeddings' },
   { value: '0.83', label: 'recall@5' },
   { value: '0.79', label: 'faithfulness' },
@@ -134,7 +128,7 @@ export default function LandingPage() {
           <p className="mx-auto mt-5 max-w-2xl text-base text-text-secondary md:text-lg">
             Upload your lecture PDFs, scanned notes, and handwritten derivations.
             Ask anything. Get grounded answers with page-level citations, Socratic
-            dialogue, and adaptive-difficulty quizzes — all running locally via Ollama.
+            dialogue, and adaptive study support — all running locally via Ollama.
           </p>
 
           <div className="mt-8 flex flex-wrap justify-center gap-3">
@@ -197,7 +191,7 @@ export default function LandingPage() {
             <div className="text-center">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white font-bold text-lg">3</div>
               <h3 className="mb-2 font-semibold">Track mastery</h3>
-              <p className="text-sm text-text-secondary">Quiz answers update your Beta(α, β) posterior. Difficulty adapts to your posterior mean. See your 95% credible interval after every quiz.</p>
+              <p className="text-sm text-text-secondary">Your study sessions update your Beta(α, β) posterior. See your 95% credible interval as your confidence improves.</p>
             </div>
           </div>
         </div>

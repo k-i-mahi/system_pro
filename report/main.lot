@@ -1,17 +1,12 @@
 \addvspace {10\p@ }
 \addvspace {10\p@ }
-\contentsline {table}{\numberline {2.1}{\ignorespaces Feature comparison against representative learning systems. $\text {$\mathsurround \z@ \mathchar "458$}$ = fully implemented, $\circ $ = partial/vendor-locked, -- = absent.}}{8}{table.caption.7}%
+\contentsline {table}{\numberline {2.1}{\ignorespaces Positioning of Cognitive Copilot relative to common alternatives.}}{7}{table.caption.6}%
 \addvspace {10\p@ }
 \addvspace {10\p@ }
-\contentsline {table}{\numberline {4.1}{\ignorespaces Technology Stack Used in Implementation}}{18}{table.caption.20}%
-\contentsline {table}{\numberline {4.2}{\ignorespaces Selected Implemented API Endpoints}}{21}{table.caption.21}%
-\contentsline {table}{\numberline {4.3}{\ignorespaces Sample Input and Output Across Core Modules}}{22}{table.caption.22}%
-\contentsline {table}{\numberline {4.4}{\ignorespaces Observed Functional Outcomes During Validation Runs}}{26}{table.caption.34}%
-\contentsline {table}{\numberline {4.5}{\ignorespaces RAG quality and latency against the 40-question golden dataset.}}{28}{table.caption.35}%
-\contentsline {table}{\numberline {4.6}{\ignorespaces OCR CER and WER on the 10-sample golden OCR set (lower is better).}}{29}{table.caption.36}%
-\contentsline {table}{\numberline {4.7}{\ignorespaces Agent and Quiz Stability Metrics}}{29}{table.caption.37}%
+\contentsline {table}{\numberline {4.1}{\ignorespaces Technology stack used in implementation.}}{15}{table.caption.18}%
+\contentsline {table}{\numberline {4.2}{\ignorespaces Quantitative validation summary (reporting level, not a frozen benchmark).}}{17}{table.caption.20}%
+\contentsline {table}{\numberline {4.3}{\ignorespaces Selected implemented API endpoints (illustrative snapshot).}}{21}{table.caption.28}%
+\contentsline {table}{\numberline {4.4}{\ignorespaces Mapping of project objectives to outcomes.}}{22}{table.caption.29}%
 \addvspace {10\p@ }
-\contentsline {table}{\numberline {5.1}{\ignorespaces Security Controls and Compliance Notes}}{32}{table.caption.38}%
 \addvspace {10\p@ }
-\contentsline {table}{\numberline {6.1}{\ignorespaces Key Engineering Trade-offs and Justifications}}{38}{table.caption.39}%
 \addvspace {10\p@ }

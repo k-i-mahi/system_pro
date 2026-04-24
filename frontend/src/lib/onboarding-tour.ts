@@ -28,7 +28,7 @@ const DEFAULT_STEPS: TourStep[] = [
     element: '[data-tour="ai-tutor"]',
     title: 'AI Tutor',
     description:
-      'Four modes: Chat (agentic with tools), Ask Course (grounded with citations), Explain (structured), Quiz (adaptive difficulty).',
+      'Three modes: Chat (agentic with tools), Ask Course (grounded with citations), Explain (structured), plus resource discovery support.',
     side: 'right',
   },
   {

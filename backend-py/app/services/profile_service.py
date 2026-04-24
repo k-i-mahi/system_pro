@@ -17,6 +17,9 @@ def _serialize(user: User) -> dict:
         "avatarUrl": user.avatar_url,
         "bio": user.bio,
         "phone": user.phone,
+        "rollNumber": user.roll_number,
+        "session": user.session,
+        "department": user.department,
         "role": user.role,
         "language": user.language,
         "timezone": user.timezone,
@@ -35,7 +38,15 @@ async def update_profile(db: AsyncSession, user_id: str, data: dict) -> dict:
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if not user:
         raise NotFoundError("User not found")
-    field_map = {"name": "name", "universityName": "university_name", "bio": "bio", "phone": "phone"}
+    field_map = {
+        "name": "name",
+        "universityName": "university_name",
+        "bio": "bio",
+        "phone": "phone",
+        "rollNumber": "roll_number",
+        "session": "session",
+        "department": "department",
+    }
     for key, attr in field_map.items():
         if key in data and data[key] is not None:
             setattr(user, attr, data[key])
@@ -48,6 +59,10 @@ async def update_profile(db: AsyncSession, user_id: str, data: dict) -> dict:
         "avatarUrl": user.avatar_url,
         "bio": user.bio,
         "phone": user.phone,
+        "rollNumber": user.roll_number,
+        "session": user.session,
+        "department": user.department,
+        "role": user.role,
     }
 
 

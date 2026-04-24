@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.core.deps import CurrentUserIdDep, DBDep, get_current_user_id
 from app.core.response import success
+from app.schemas.notifications import ClassResponseRequest
 from app.services import notifications_service
 
 router = APIRouter(dependencies=[Depends(get_current_user_id)])
@@ -36,4 +37,10 @@ async def mark_read(notif_id: str, db: DBDep, user_id: CurrentUserIdDep):
 @router.delete("/{notif_id}")
 async def delete_notification(notif_id: str, db: DBDep, user_id: CurrentUserIdDep):
     data = await notifications_service.delete_notification(db, notif_id, user_id)
+    return success(data)
+
+
+@router.post("/class-response")
+async def submit_class_response(body: ClassResponseRequest, db: DBDep, user_id: CurrentUserIdDep):
+    data = await notifications_service.submit_class_response(db, user_id, body.model_dump())
     return success(data)

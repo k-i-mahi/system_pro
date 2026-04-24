@@ -1,31 +1,26 @@
 \addvspace {10\p@ }
-\contentsline {figure}{\numberline {1.1}{\ignorespaces Project Activity Timeline (four iterative phases over eleven weeks)}}{3}{figure.caption.6}%
 \addvspace {10\p@ }
 \addvspace {10\p@ }
-\contentsline {figure}{\numberline {3.1}{\ignorespaces Cognitive Copilot high-level architecture. The Python AI Sidecar (FastAPI) handles all heavy ML inference (TrOCR, Nougat) independently from the Node.js backend.}}{9}{figure.caption.8}%
-\contentsline {figure}{\numberline {3.2}{\ignorespaces Use Case Diagram of Core Actors and Functions}}{10}{figure.caption.9}%
-\contentsline {figure}{\numberline {3.3}{\ignorespaces UML Class Diagram of Core Models (abridged from 14-table schema)}}{10}{figure.caption.10}%
-\contentsline {figure}{\numberline {3.4}{\ignorespaces ER Diagram of Main Entities. \texttt {Embedding} stores 768-dim vectors and \texttt {tsvector} for hybrid RAG retrieval.}}{11}{figure.caption.11}%
-\contentsline {figure}{\numberline {3.5}{\ignorespaces Activity Diagram for Authentication Flow (JWT access + refresh token pattern)}}{11}{figure.caption.12}%
-\contentsline {figure}{\numberline {3.6}{\ignorespaces Activity Diagram for Material Ingest and RAG Embedding Pipeline}}{12}{figure.caption.13}%
-\contentsline {figure}{\numberline {3.7}{\ignorespaces Sequence Diagram of RAG Ask-Course Workflow with SSE Streaming and Citation Frame}}{13}{figure.caption.14}%
-\contentsline {figure}{\numberline {3.8}{\ignorespaces Sequence Diagram of AI Quiz Workflow with Bayesian Posterior Return}}{13}{figure.caption.15}%
-\contentsline {figure}{\numberline {3.9}{\ignorespaces Deployment Diagram for Local/Development Environment. \texttt {pgvector:pg15} provides vector similarity search alongside standard SQL.}}{14}{figure.caption.16}%
-\contentsline {figure}{\numberline {3.10}{\ignorespaces RAG pipeline. Top row (ingestion): material upload triggers a BullMQ worker that extracts, chunks, embeds, and stores into both pgvector and \texttt {tsvector}. Bottom row (query): BM25 and cosine retrieval run in parallel; Reciprocal Rank Fusion selects the top-8 chunks for grounded generation.}}{14}{figure.caption.17}%
-\contentsline {figure}{\numberline {3.11}{\ignorespaces OCR dispatch. The accurate path calls the Python FastAPI sidecar; on sidecar failure the backend falls back to the fast path preserving availability.}}{15}{figure.caption.18}%
-\contentsline {figure}{\numberline {3.12}{\ignorespaces ReAct loop with deterministic strategy selection and five tools. The strategy selector uses the student's Beta-posterior mean to bias toward Socratic probing when mastery is low.}}{16}{figure.caption.19}%
+\contentsline {figure}{\numberline {3.1}{\ignorespaces Layered architecture of the Cognitive Copilot system.}}{9}{figure.caption.7}%
+\contentsline {figure}{\numberline {3.2}{\ignorespaces Use case diagram of key actors and system interactions.}}{9}{figure.caption.8}%
+\contentsline {figure}{\numberline {3.3}{\ignorespaces High level class relationship diagram for core entities.}}{10}{figure.caption.9}%
+\contentsline {figure}{\numberline {3.4}{\ignorespaces Conceptual ER diagram of the main project core tables.}}{11}{figure.caption.10}%
+\contentsline {figure}{\numberline {3.5}{\ignorespaces End to end interaction flow from user action to synchronized UI state.}}{11}{figure.caption.11}%
+\contentsline {figure}{\numberline {3.6}{\ignorespaces Activity diagram for the authentication request lifecycle.}}{12}{figure.caption.12}%
+\contentsline {figure}{\numberline {3.7}{\ignorespaces Sequence diagram for AI Tutor request and response flow.}}{13}{figure.caption.13}%
+\contentsline {figure}{\numberline {3.8}{\ignorespaces Asynchronous job flow used for heavy operations.}}{13}{figure.caption.14}%
+\contentsline {figure}{\numberline {3.9}{\ignorespaces Component level view of the major software blocks with interaction paths.}}{13}{figure.caption.15}%
+\contentsline {figure}{\numberline {3.10}{\ignorespaces Deployment diagram for local/full-stack runtime setup.}}{13}{figure.caption.16}%
+\contentsline {figure}{\numberline {3.11}{\ignorespaces Data flow diagram showing request, processing, and persistence paths.}}{14}{figure.caption.17}%
 \addvspace {10\p@ }
-\contentsline {figure}{\numberline {4.1}{\ignorespaces Landing Page — Feature Grid and Technology Badge Cloud}}{22}{figure.caption.23}%
-\contentsline {figure}{\numberline {4.2}{\ignorespaces Login and Registration Interface (dark mode)}}{23}{figure.caption.24}%
-\contentsline {figure}{\numberline {4.3}{\ignorespaces Course Listing and Topic Progress View}}{23}{figure.caption.25}%
-\contentsline {figure}{\numberline {4.4}{\ignorespaces AI Tutor — Chat Mode with Strategy Badge and Thinking Trace}}{23}{figure.caption.26}%
-\contentsline {figure}{\numberline {4.5}{\ignorespaces AI Tutor — Ask Course Mode with Citation Chips and Material Preview Panel}}{24}{figure.caption.27}%
-\contentsline {figure}{\numberline {4.6}{\ignorespaces AI Tutor — Quiz Mode with Animated Progress Ring and Beta Posterior Display}}{24}{figure.caption.28}%
-\contentsline {figure}{\numberline {4.7}{\ignorespaces AI Tutor — Resource Discovery Mode with Type Filter Pills}}{24}{figure.caption.29}%
-\contentsline {figure}{\numberline {4.8}{\ignorespaces Instructor Evaluation Dashboard (p95 latency, faithfulness, expertise curves)}}{25}{figure.caption.30}%
-\contentsline {figure}{\numberline {4.9}{\ignorespaces Analytics and Overview Dashboard (attendance, exam trends)}}{25}{figure.caption.31}%
-\contentsline {figure}{\numberline {4.10}{\ignorespaces Real-Time Notification Center}}{25}{figure.caption.32}%
-\contentsline {figure}{\numberline {4.11}{\ignorespaces OCR Routine Scan — Editable Draft Before Confirmation}}{26}{figure.caption.33}%
+\contentsline {figure}{\numberline {4.1}{\ignorespaces Project-core module connectivity in implementation.}}{17}{figure.caption.19}%
+\contentsline {figure}{\numberline {4.2}{\ignorespaces Landing page.}}{18}{figure.caption.21}%
+\contentsline {figure}{\numberline {4.3}{\ignorespaces Login interface.}}{19}{figure.caption.22}%
+\contentsline {figure}{\numberline {4.4}{\ignorespaces Routine page and slot visualization.}}{19}{figure.caption.23}%
+\contentsline {figure}{\numberline {4.5}{\ignorespaces AI Tutor workspace.}}{20}{figure.caption.24}%
+\contentsline {figure}{\numberline {4.6}{\ignorespaces Analytics dashboard.}}{20}{figure.caption.25}%
+\contentsline {figure}{\numberline {4.7}{\ignorespaces Community and classroom flow.}}{20}{figure.caption.26}%
+\contentsline {figure}{\numberline {4.8}{\ignorespaces Notification center with deep links.}}{21}{figure.caption.27}%
 \addvspace {10\p@ }
 \addvspace {10\p@ }
 \addvspace {10\p@ }

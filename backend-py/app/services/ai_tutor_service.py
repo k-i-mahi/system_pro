@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError, ValidationError
 from app.models.course import Course, Topic, TopicProgress
-from app.models.misc import ExamAttempt
 from app.services import ollama_service, search_service
 from app.services.rag.answer import answer_with_citations, stream_answer_with_citations
+from app.services.rag.rag_access import ensure_ask_course_access, ingest_readiness_for_scope
 from app.services.rag.retriever import RetrievalScope
 
 QUIZ_SCHEMA = {
@@ -160,21 +160,16 @@ async def submit_quiz(
         is_correct = user_answer == q["correct"]
         if is_correct:
             correct += 1
-        breakdown.append({"questionId": q["id"], "question": q["question"], "correct": q["correct"], "userAnswer": user_answer, "isCorrect": is_correct})
+        breakdown.append({
+            "questionId": q["id"],
+            "question": q["question"],
+            "correct": q["correct"],
+            "userAnswer": user_answer,
+            "isCorrect": is_correct,
+        })
 
     incorrect = len(questions) - correct
     score = correct / len(questions) if questions else 0
-
-    attempt = ExamAttempt(
-        user_id=user_id,
-        topic_id=topic_id,
-        questions=questions,
-        score=score * 100,
-        total_q=len(questions),
-        time_taken=time_taken,
-    )
-    db.add(attempt)
-    await db.flush()
 
     progress = (await db.execute(
         select(TopicProgress).where(TopicProgress.user_id == user_id, TopicProgress.topic_id == topic_id)
@@ -206,12 +201,12 @@ async def submit_quiz(
     posterior = {"alpha": new_alpha, "beta": new_beta, "mean": mean, "lower": lower, "upper": upper}
 
     return {
-        "attemptId": attempt.id,
         "score": correct,
         "total": len(questions),
         "percentage": round(score * 100),
         "breakdown": breakdown,
         "posterior": posterior,
+        "timeTaken": time_taken,
     }
 
 
@@ -231,17 +226,15 @@ async def ask_course(
     if not question or len(question.strip()) < 3:
         raise ValidationError("Please provide a question of at least 3 characters", code="BAD_QUESTION")
 
-    if course_id:
-        course = await db.get(Course, course_id)
-        if not course:
-            raise NotFoundError("Course not found")
+    await ensure_ask_course_access(db, user_id, course_id, topic_id, material_ids)
 
     scope = RetrievalScope(course_id=course_id, topic_id=topic_id, material_ids=material_ids, user_id=user_id)
+    ingest_meta = await ingest_readiness_for_scope(db, scope)
 
     if stream:
-        return stream_answer_with_citations(db, question, scope, user_id=user_id)
+        return stream_answer_with_citations(db, question, scope, user_id=user_id, ingest_meta=ingest_meta)
 
-    result = await answer_with_citations(db, question, scope, user_id=user_id)
+    result = await answer_with_citations(db, question, scope, user_id=user_id, ingest_meta=ingest_meta)
     return {
         "answer": result.answer,
         "citations": [
@@ -252,4 +245,5 @@ async def ask_course(
             for c in result.citations
         ],
         "chunkCount": len(result.chunks),
+        "ingest": ingest_meta,
     }

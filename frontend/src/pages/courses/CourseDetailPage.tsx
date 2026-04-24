@@ -312,13 +312,6 @@ export default function CourseDetailPage() {
                             >
                               <Bot size={14} />
                             </Link>
-                            <Link
-                              to={`/ai-tutor?topicId=${topic.id}&courseId=${courseId}&mode=exam`}
-                              className="p-1.5 rounded hover:bg-primary-light text-primary"
-                              title="Take Exam"
-                            >
-                              <FileText size={14} />
-                            </Link>
                             <button
                               onClick={() => deleteTopicMutation.mutate(topic.id)}
                               className="p-1.5 rounded hover:bg-red-50 text-danger"

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { BookOpen, Send, Sparkles } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, RefreshCw, Send, Sparkles } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '@/stores/auth.store';
 import { Button } from '../ui/button';
@@ -14,24 +14,87 @@ interface Answer {
   loading: boolean;
 }
 
+export interface CourseMaterialOption {
+  id: string;
+  title: string;
+  fileType?: string;
+  hasEmbeddings?: boolean;
+  ingestStatus?: string;
+  chunkCount?: number;
+  ingestError?: string | null;
+}
+
 interface Props {
   courseId?: string;
   topicId?: string;
+  materials?: CourseMaterialOption[];
   onCitationClick?: (c: Citation) => void;
 }
 
-export function AskCoursePane({ courseId, topicId, onCitationClick }: Props) {
+function ingestBadge(m: CourseMaterialOption): { label: string; className: string } {
+  const st = m.ingestStatus || 'PENDING';
+  if (st === 'DONE' && m.hasEmbeddings && (m.chunkCount ?? 0) > 0) {
+    return { label: 'Ready', className: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400' };
+  }
+  if (st === 'FAILED' || (st === 'DONE' && !m.hasEmbeddings)) {
+    return { label: 'Failed', className: 'bg-destructive/15 text-destructive' };
+  }
+  if (st === 'PROCESSING') {
+    return { label: 'Indexing…', className: 'bg-primary/15 text-primary' };
+  }
+  return { label: 'Queued', className: 'bg-amber-500/15 text-amber-800 dark:text-amber-300' };
+}
+
+export function AskCoursePane({ courseId, topicId, materials, onCitationClick }: Props) {
   const [question, setQuestion] = useState('');
   const [answers, setAnswers] = useState<Answer[]>([]);
   const [streaming, setStreaming] = useState(false);
+  const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const user = useAuthStore((s) => s.user);
+
+  const fileMaterials = useMemo(
+    () => (materials ?? []).filter((m) => m.fileType !== 'LINK'),
+    [materials]
+  );
+
+  const canReingest = user?.role === 'TUTOR' || user?.role === 'ADMIN' || user?.role === 'MENTOR';
+
+  useEffect(() => {
+    setSelectedMaterialIds(fileMaterials.map((m) => m.id));
+  }, [topicId, fileMaterials]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [answers]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  function toggleMaterial(id: string) {
+    setSelectedMaterialIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  }
+
+  async function reingest(materialId: string) {
+    if (!courseId || !topicId) return;
+    try {
+      const r = await fetch(
+        `/api/courses/${courseId}/topics/${topicId}/materials/${materialId}/reingest`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${useAuthStore.getState().accessToken || ''}`,
+          },
+        }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      toast.success('Re-index started for this file.');
+    } catch {
+      toast.error('Could not start re-index.');
+    }
+  }
 
   async function ask() {
     const q = question.trim();
@@ -40,16 +103,27 @@ export function AskCoursePane({ courseId, topicId, onCitationClick }: Props) {
       toast.error('Select a course to ground your question.');
       return;
     }
+    if (fileMaterials.length > 0 && selectedMaterialIds.length === 0) {
+      toast.error('Select at least one file to search, or re-select all materials.');
+      return;
+    }
 
-    setAnswers((prev) => [
-      ...prev,
-      { question: q, body: '', citations: [], loading: true },
-    ]);
+    setAnswers((prev) => [...prev, { question: q, body: '', citations: [], loading: true }]);
     setQuestion('');
     setStreaming(true);
 
     const controller = new AbortController();
     abortRef.current = controller;
+
+    const body: Record<string, unknown> = { question: q, courseId, stream: true };
+    if (topicId) body.topicId = topicId;
+    if (
+      fileMaterials.length > 0 &&
+      selectedMaterialIds.length > 0 &&
+      selectedMaterialIds.length < fileMaterials.length
+    ) {
+      body.materialIds = selectedMaterialIds;
+    }
 
     try {
       const response = await fetch('/api/ai-tutor/ask-course', {
@@ -58,7 +132,7 @@ export function AskCoursePane({ courseId, topicId, onCitationClick }: Props) {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${useAuthStore.getState().accessToken || ''}`,
         },
-        body: JSON.stringify({ question: q, courseId, topicId, stream: true }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 
@@ -88,7 +162,29 @@ export function AskCoursePane({ courseId, topicId, onCitationClick }: Props) {
           if (!data) continue;
 
           try {
-            const parsed = JSON.parse(data);
+            const parsed = JSON.parse(data) as Record<string, unknown>;
+            if (currentEvent === 'meta' && parsed.ingest && typeof parsed.ingest === 'object') {
+              const ing = parsed.ingest as {
+                pending?: number;
+                processing?: number;
+                failed?: number;
+                ready?: number;
+                total?: number;
+              };
+              const pend = (ing.pending ?? 0) + (ing.processing ?? 0);
+              if (pend > 0) {
+                toast(`Still indexing ${pend} file(s)…`, { duration: 4000 });
+              }
+              if ((ing.failed ?? 0) > 0) {
+                toast.error(`${ing.failed} file(s) failed indexing.`);
+              }
+              if ((ing.total ?? 0) > 0 && (ing.ready ?? 0) === 0) {
+                toast('No files are ready in this scope yet — answer may explain indexing status.', {
+                  duration: 5000,
+                });
+              }
+              continue;
+            }
             const tokenChunk =
               currentEvent === 'token'
                 ? typeof parsed === 'string'
@@ -112,12 +208,12 @@ export function AskCoursePane({ courseId, topicId, onCitationClick }: Props) {
                 const updated = [...prev];
                 updated[updated.length - 1] = {
                   ...updated[updated.length - 1],
-                  citations: parsed.citations,
+                  citations: parsed.citations as Citation[],
                 };
                 return updated;
               });
             } else if (currentEvent === 'error') {
-              throw new Error(parsed.message || 'stream error');
+              throw new Error((parsed.message as string) || 'stream error');
             }
           } catch {
             /* ignore malformed */
@@ -186,11 +282,7 @@ export function AskCoursePane({ courseId, topicId, onCitationClick }: Props) {
               <div className="flex flex-wrap gap-1.5">
                 <span className="text-xs text-text-secondary">Sources:</span>
                 {a.citations.map((c) => (
-                  <CitationChip
-                    key={c.index}
-                    citation={c}
-                    onClick={onCitationClick}
-                  />
+                  <CitationChip key={c.index} citation={c} onClick={onCitationClick} />
                 ))}
               </div>
             )}
@@ -198,6 +290,47 @@ export function AskCoursePane({ courseId, topicId, onCitationClick }: Props) {
         ))}
         <div ref={endRef} />
       </div>
+
+      {fileMaterials.length > 0 && (
+        <div className="max-h-40 space-y-2 overflow-y-auto border-t border-border px-4 py-3">
+          <p className="text-xs font-medium text-text-secondary">Ground in these files</p>
+          <ul className="space-y-1.5">
+            {fileMaterials.map((m) => {
+              const badge = ingestBadge(m);
+              return (
+                <li
+                  key={m.id}
+                  className="flex items-center gap-2 rounded-lg border border-border/60 bg-bg-card/50 px-2 py-1.5 text-xs"
+                >
+                  <input
+                    type="checkbox"
+                    className="rounded border-border"
+                    checked={selectedMaterialIds.includes(m.id)}
+                    onChange={() => toggleMaterial(m.id)}
+                    aria-label={`Include ${m.title}`}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-text-primary" title={m.title}>
+                    {m.title}
+                  </span>
+                  <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium', badge.className)}>
+                    {badge.label}
+                  </span>
+                  {canReingest && (m.ingestStatus === 'FAILED' || (m.ingestStatus === 'DONE' && !m.hasEmbeddings)) && (
+                    <button
+                      type="button"
+                      className="shrink-0 rounded p-1 text-text-secondary hover:bg-border hover:text-text-primary"
+                      title="Re-run indexing"
+                      onClick={() => reingest(m.id)}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
 
       <form
         onSubmit={(e) => {
@@ -219,11 +352,7 @@ export function AskCoursePane({ courseId, topicId, onCitationClick }: Props) {
           disabled={streaming || !courseId}
           aria-label="Course question input"
         />
-        <Button
-          type="submit"
-          disabled={!question.trim() || streaming || !courseId}
-          aria-label="Ask"
-        >
+        <Button type="submit" disabled={!question.trim() || streaming || !courseId} aria-label="Ask">
           <Send className="h-4 w-4" />
         </Button>
       </form>

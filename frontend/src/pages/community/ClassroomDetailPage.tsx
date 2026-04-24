@@ -79,7 +79,10 @@ export default function ClassroomDetailPage() {
     enabled: !!id,
   });
 
-  const isTutor = community?.createdBy === user?.id;
+  const isTutor =
+    community?.createdBy === user?.id ||
+    user?.role === 'ADMIN' ||
+    (community?.members ?? []).some((m: CommunityMember) => m.user?.id === user?.id && m.role === 'TUTOR');
 
   if (isLoading) return <div className="text-center py-12 text-text-muted">Loading...</div>;
   if (!community) return <div className="text-center py-12 text-text-muted">Community not found</div>;

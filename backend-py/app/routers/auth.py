@@ -74,7 +74,7 @@ async def forgot_password(
     redis: aioredis.Redis = Depends(get_redis),
 ) -> JSONResponse:
     await auth_service.forgot_password(db, redis, body)
-    return resp.success({"message": "If the email exists, a reset code has been sent"})
+    return resp.success({"message": "If the email exists, a password reset link has been sent"})
 
 
 @router.post("/verify-otp")
