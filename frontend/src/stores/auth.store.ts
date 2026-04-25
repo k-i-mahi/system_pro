@@ -36,8 +36,11 @@ export const useAuthStore = create<AuthState>()(
       setUser: (user) => set({ user }),
       login: (user, accessToken, refreshToken) =>
         set({ user, accessToken, refreshToken, isAuthenticated: true }),
-      logout: () =>
-        set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false }),
+      logout: () => {
+        // Discard any unsaved scan/routine draft so it doesn't bleed into the next session.
+        window.localStorage.removeItem('routine-draft-v1');
+        set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false });
+      },
     }),
     { name: 'auth-storage' }
   )

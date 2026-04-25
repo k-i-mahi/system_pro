@@ -1301,12 +1301,25 @@ export default function RoutinePage() {
                         key={slot.id}
                         draggable
                         onDragStart={(e) => handleDragStart(e, slot.id)}
-                        className="bg-primary-light rounded-md p-2 text-xs group relative cursor-grab active:cursor-grabbing"
+                        className={`rounded-md p-2 text-xs group relative cursor-grab active:cursor-grabbing border-l-2 ${
+                          slot.type === 'LAB'
+                            ? 'bg-violet-50 border-l-violet-400'
+                            : 'bg-primary-light border-l-primary'
+                        }`}
                       >
                         <div className="absolute top-1/2 -translate-y-1/2 left-0.5 opacity-0 group-hover:opacity-40 pointer-events-none">
                           <GripVertical size={10} />
                         </div>
-                        <p className="font-semibold text-primary-dark">{slot.courseCode}</p>
+                        <div className="flex items-start justify-between gap-1 pr-4">
+                          <p className="font-semibold text-primary-dark leading-tight">{slot.courseCode}</p>
+                          <span className={`shrink-0 text-[9px] font-bold uppercase tracking-wide rounded px-1 py-0.5 ${
+                            slot.type === 'LAB'
+                              ? 'bg-violet-100 text-violet-700'
+                              : 'bg-primary/10 text-primary-dark'
+                          }`}>
+                            {slot.type === 'LAB' ? 'Lab' : 'Theory'}
+                          </span>
+                        </div>
                         <div className="flex items-center gap-1 text-text-secondary mt-1">
                           <Clock size={10} />
                           <span>{slot.startTime} – {slot.endTime}</span>

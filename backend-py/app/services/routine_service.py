@@ -229,7 +229,7 @@ async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCo
                     ],
                 )
 
-        # Find or create course
+        # Find or create course — always sync the course name to the submitted value.
         result = await db.execute(
             select(Course).where(Course.course_code == course_data.courseCode)
         )
@@ -241,6 +241,9 @@ async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCo
             )
             db.add(course)
             await db.flush()  # get id without committing
+        elif course.course_name != course_data.courseName:
+            # Update stale name (e.g. from a previous test run with gibberish).
+            course.course_name = course_data.courseName
 
         # Upsert enrollment
         enr_result = await db.execute(
@@ -252,8 +255,19 @@ async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCo
         if not enr_result.scalar_one_or_none():
             db.add(Enrollment(user_id=user_id, course_id=course.id))
 
-        # Create schedule slots
+        # Create schedule slots — skip exact duplicates to prevent double-saves.
         for slot in course_data.slots:
+            dup = await db.execute(
+                select(ScheduleSlot).where(
+                    ScheduleSlot.course_id == course.id,
+                    ScheduleSlot.day_of_week == slot.dayOfWeek,
+                    ScheduleSlot.start_time == slot.startTime,
+                    ScheduleSlot.end_time == slot.endTime,
+                )
+            )
+            if dup.scalar_one_or_none() is not None:
+                # Identical slot already exists — don't create a duplicate.
+                continue
             db.add(ScheduleSlot(
                 course_id=course.id,
                 day_of_week=slot.dayOfWeek,
