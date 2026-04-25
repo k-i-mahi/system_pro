@@ -16,6 +16,7 @@ class SlotInput(BaseModel):
     endTime: str
     type: SlotType = SlotType.CLASS
     room: str | None = None
+    isAlternating: bool = False
 
     @field_validator("startTime", "endTime")
     @classmethod

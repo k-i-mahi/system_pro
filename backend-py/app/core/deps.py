@@ -8,7 +8,7 @@ from fastapi import Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import UnauthorizedError, ForbiddenError
+from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import decode_token
 from app.db.session import AsyncSessionLocal
 from app.models.enums import Role
@@ -55,7 +55,14 @@ async def get_current_user_id(
     if payload.get("type") != "access":
         raise UnauthorizedError("Invalid token type")
 
-    return payload["userId"]
+    user_id = payload["userId"]
+    token_auth_version = int(payload.get("authVersion", 0))
+    current_auth_version = await redis.get(f"authv:{user_id}")
+
+    if current_auth_version is not None and token_auth_version != int(current_auth_version):
+        raise UnauthorizedError("Token revoked")
+
+    return user_id
 
 
 CurrentUserIdDep = Annotated[str, Depends(get_current_user_id)]

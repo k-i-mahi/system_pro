@@ -41,7 +41,17 @@ METRICS_KEY=change-me
 CORS_ORIGINS=http://localhost:5173
 PORT=3001
 NODE_ENV=development
+EMAIL_PROVIDER=resend
+EMAIL_FROM_NAME=Cognitive Copilot
+EMAIL_FROM_ADDRESS=noreply@yourdomain.com
+EMAIL_REPLY_TO=support@yourdomain.com
+RESEND_API_KEY=re_xxxxxxxxx
+FRONTEND_URL=http://localhost:5173
 ```
+
+For production password reset delivery, verify one sending domain once and keep a single shared
+sender such as `noreply@yourdomain.com`. Every user email is sent through that sender account; you
+do not need to set separate SMTP credentials for each user.
 
 ## 4) Run Services (Local Dev)
 

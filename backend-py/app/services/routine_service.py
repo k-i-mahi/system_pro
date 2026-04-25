@@ -38,22 +38,11 @@ def _time_overlaps(a_start: str, a_end: str, b_start: str, b_end: str) -> bool:
         h, m = map(int, t.split(":"))
         return h * 60 + m
 
-    def _normalized_end(start: str, end: str) -> int:
-        s_min = _to_minutes(start)
-        e_min = _to_minutes(end)
-        if e_min > s_min:
-            return e_min
-        s_hour = int(start.split(":")[0])
-        e_hour = int(end.split(":")[0])
-        # Accept clockwise 12h-style input like 11:00 -> 01:30.
-        if s_hour < 12 and e_hour < 12:
-            return e_min + 12 * 60
-        return e_min
-
+    # 24-hour times are always unambiguous — no clockwise heuristic needed.
     a_s = _to_minutes(a_start)
-    a_e = _normalized_end(a_start, a_end)
+    a_e = _to_minutes(a_end)
     b_s = _to_minutes(b_start)
-    b_e = _normalized_end(b_start, b_end)
+    b_e = _to_minutes(b_end)
     return a_s < b_e and a_e > b_s
 
 
@@ -225,7 +214,8 @@ async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCo
                         "conflictsWithEndTime": occupied["endTime"],
                     }
                 )
-            if conflicts:
+            # Alternating-week slots are allowed to overlap — user confirmed the rotation.
+            if conflicts and not slot.isAlternating:
                 raise ValidationError(
                     "Schedule conflict: check routine properly and enter a free valid slot.",
                     details=[

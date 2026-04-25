@@ -39,7 +39,15 @@ OLLAMA_EMBEDDING_MODEL=nomic-embed-text
 AI_SIDECAR_URL=http://localhost:8000
 CORS_ORIGINS=http://localhost:5173
 PORT=3001
+EMAIL_PROVIDER=resend
+EMAIL_FROM_NAME=Cognitive Copilot
+EMAIL_FROM_ADDRESS=noreply@yourdomain.com
+EMAIL_REPLY_TO=support@yourdomain.com
+RESEND_API_KEY=re_xxxxxxxxx
 ```
+
+Password reset emails should be sent from one shared app sender such as `noreply@yourdomain.com`.
+You verify that domain once and keep one API key or SMTP credential for the app, not one per user.
 
 4) Run backend:
 

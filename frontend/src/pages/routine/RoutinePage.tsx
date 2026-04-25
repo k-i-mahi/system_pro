@@ -36,6 +36,7 @@ interface SlotForm {
   endTime: string;
   type: 'CLASS' | 'LAB';
   room: string;
+  isAlternating: boolean;
 }
 
 interface CourseForm {
@@ -71,8 +72,15 @@ interface ConflictEditForm {
   room: string;
 }
 
+interface AlternatingPrompt {
+  courseIdx: number;
+  slotIdx: number;
+  conflictLabel: string;
+  conflictingKey?: string;
+}
+
 function emptySlot(): SlotForm {
-  return { dayOfWeek: 'MON', startTime: '09:00', endTime: '10:30', type: 'CLASS', room: '' };
+  return { dayOfWeek: 'MON', startTime: '09:00', endTime: '10:30', type: 'CLASS', room: '', isAlternating: false };
 }
 
 function timeToMinutes(t: string) {
@@ -80,35 +88,17 @@ function timeToMinutes(t: string) {
   return h * 60 + m;
 }
 
-function normalizeEndMinutes(startTime: string, endTime: string) {
-  const start = timeToMinutes(startTime);
-  const end = timeToMinutes(endTime);
-  if (end > start) return end;
-  const startHour = Number(startTime.split(':')[0] || 0);
-  const endHour = Number(endTime.split(':')[0] || 0);
-  // User often enters afternoon end-time on a 12-hour clock face (e.g., 11:00 -> 01:30).
-  if (startHour < 12 && endHour < 12) return end + 12 * 60;
-  return end;
-}
-
-function isValidClockwiseRange(startTime: string, endTime: string) {
-  return normalizeEndMinutes(startTime, endTime) > timeToMinutes(startTime);
+/** Pure 24-hour comparison — end must be strictly after start. */
+function isValidRange(startTime: string, endTime: string) {
+  return timeToMinutes(endTime) > timeToMinutes(startTime);
 }
 
 function isOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string) {
   const aStartMin = timeToMinutes(aStart);
-  const aEndMin = normalizeEndMinutes(aStart, aEnd);
+  const aEndMin = timeToMinutes(aEnd);
   const bStartMin = timeToMinutes(bStart);
-  const bEndMin = normalizeEndMinutes(bStart, bEnd);
+  const bEndMin = timeToMinutes(bEnd);
   return aStartMin < bEndMin && aEndMin > bStartMin;
-}
-
-function getHourPart(t: string): string {
-  return (t || '').split(':')[0] ?? '';
-}
-
-function getMinutePart(t: string): string {
-  return (t || '').split(':')[1] ?? '';
 }
 
 function clampSegment(raw: string, max: number): string {
@@ -118,27 +108,20 @@ function clampSegment(raw: string, max: number): string {
   return String(n);
 }
 
-function padSegment(raw: string): string {
-  const digits = (raw || '').replace(/\D/g, '').slice(0, 2);
-  if (!digits) return '00';
-  return digits.padStart(2, '0');
-}
-
-function buildTimeFromSegments(hour: string, minute: string): string {
-  return `${padSegment(hour)}:${padSegment(minute)}`;
-}
 
 type TimeSeg = 'sh' | 'sm' | 'eh' | 'em';
 const SEG_RIGHT: Record<TimeSeg, TimeSeg> = { sh: 'sm', sm: 'eh', eh: 'em', em: 'sh' };
 const SEG_LEFT: Record<TimeSeg, TimeSeg> = { sm: 'sh', eh: 'sm', em: 'eh', sh: 'em' };
 
+const DRAFT_KEY = 'routine-draft-v1';
+
 export default function RoutinePage() {
-  const DRAFT_KEY = 'routine-draft-v1';
   const queryClient = useQueryClient();
   const [showUpload, setShowUpload] = useState(false);
   const [coursesForms, setCoursesForms] = useState<CourseForm[]>([]);
   const [scannedCodes, setScannedCodes] = useState<ScannedCode[]>([]);
   const [manualCodeInput, setManualCodeInput] = useState('');
+  const [draftLoaded, setDraftLoaded] = useState(false);
   const [dragOverDay, setDragOverDay] = useState<string | null>(null);
   const [conflictDialog, setConflictDialog] = useState<ConflictInfo | null>(null);
   const [showConflictEdit, setShowConflictEdit] = useState(false);
@@ -155,6 +138,7 @@ export default function RoutinePage() {
   const [pendingSlotFocusKey, setPendingSlotFocusKey] = useState<string | null>(null);
   const [ocrStep, setOcrStep] = useState(0);
   const ocrSteps = ['Detecting text zones...', 'Extracting course codes...', 'Preparing review panel...'];
+  const [alternatingPrompt, setAlternatingPrompt] = useState<AlternatingPrompt | null>(null);
   const conflictEditDayRef = useRef<HTMLSelectElement | null>(null);
   const conflictEditTypeRef = useRef<HTMLSelectElement | null>(null);
   const conflictEditStartRef = useRef<HTMLInputElement | null>(null);
@@ -168,31 +152,38 @@ export default function RoutinePage() {
     setPendingSlotFocusKey(null);
   }, [coursesForms, pendingSlotFocusKey]);
 
+  // Restore draft from localStorage on mount (localStorage persists across navigation and page refresh).
   useEffect(() => {
     try {
-      const raw = window.sessionStorage.getItem(DRAFT_KEY);
-      if (!raw) return;
-      const draft = JSON.parse(raw) as {
-        showUpload?: boolean;
-        coursesForms?: CourseForm[];
-        scannedCodes?: ScannedCode[];
-        manualCodeInput?: string;
-      };
-      if (typeof draft.showUpload === 'boolean') setShowUpload(draft.showUpload);
-      if (Array.isArray(draft.coursesForms)) setCoursesForms(draft.coursesForms);
-      if (Array.isArray(draft.scannedCodes)) setScannedCodes(draft.scannedCodes);
-      if (typeof draft.manualCodeInput === 'string') setManualCodeInput(draft.manualCodeInput);
+      const raw = window.localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const draft = JSON.parse(raw) as {
+          showUpload?: boolean;
+          coursesForms?: CourseForm[];
+          scannedCodes?: ScannedCode[];
+          manualCodeInput?: string;
+        };
+        if (typeof draft.showUpload === 'boolean') setShowUpload(draft.showUpload);
+        if (Array.isArray(draft.coursesForms)) setCoursesForms(draft.coursesForms);
+        if (Array.isArray(draft.scannedCodes)) setScannedCodes(draft.scannedCodes);
+        if (typeof draft.manualCodeInput === 'string') setManualCodeInput(draft.manualCodeInput);
+      }
     } catch {
       // Ignore broken draft payloads.
+    } finally {
+      setDraftLoaded(true);
     }
   }, []);
 
+  // Persist draft to localStorage after initial hydration — guard prevents overwriting
+  // a valid saved draft with empty initial state on the very first render.
   useEffect(() => {
-    window.sessionStorage.setItem(
+    if (!draftLoaded) return;
+    window.localStorage.setItem(
       DRAFT_KEY,
       JSON.stringify({ showUpload, coursesForms, scannedCodes, manualCodeInput })
     );
-  }, [showUpload, coursesForms, scannedCodes, manualCodeInput]);
+  }, [draftLoaded, showUpload, coursesForms, scannedCodes, manualCodeInput]);
 
   const { data: schedule = [], isLoading, isError } = useQuery({
     queryKey: ['schedule'],
@@ -262,7 +253,7 @@ export default function RoutinePage() {
       setScannedCodes([]);
       setManualCodeInput('');
       setShowUpload(false);
-      window.sessionStorage.removeItem(DRAFT_KEY);
+      window.localStorage.removeItem(DRAFT_KEY);
       toast.success('Courses and schedule saved!');
     },
     onError: (err: any) => {
@@ -546,7 +537,7 @@ export default function RoutinePage() {
     part: 'hour' | 'minute',
     rawValue: string,
   ) {
-    const max = part === 'hour' ? 23 : 59;
+    const max = part === 'hour' ? 12 : 59;
     const cleaned = clampSegment(rawValue, max);
     setCoursesForms((prev) =>
       prev.map((c, i) => {
@@ -555,11 +546,42 @@ export default function RoutinePage() {
           ...c,
           slots: c.slots.map((s, j) => {
             if (j !== slotIdx) return s;
-            const currentHour = getHourPart(s[field]);
-            const currentMinute = getMinutePart(s[field]);
-            const nextHour = part === 'hour' ? cleaned : currentHour;
-            const nextMinute = part === 'minute' ? cleaned : currentMinute;
-            return { ...s, [field]: buildTimeFromSegments(nextHour, nextMinute) };
+            // Split current stored "HH:MM" (or partial "HH:M") to get raw parts.
+            const [h24Raw, rawMin] = (s[field] || '00:00').split(':');
+            if (part === 'hour') {
+              // Convert 12h input → 24h, keeping raw stored minute (never pad mid-type).
+              const ampm = parseInt(h24Raw || '0', 10) >= 12 ? 'PM' : 'AM';
+              let h = parseInt(cleaned || '12', 10) % 12;
+              if (ampm === 'PM') h += 12;
+              return { ...s, [field]: `${String(h).padStart(2, '0')}:${rawMin ?? '00'}` };
+            } else {
+              // Keep 24h hour; store raw minute without padding so user can type "40" as "4"→"40".
+              return { ...s, [field]: `${h24Raw ?? '00'}:${cleaned}` };
+            }
+          }),
+        };
+      }),
+    );
+  }
+
+  function updateAmPm(
+    courseIdx: number,
+    slotIdx: number,
+    field: 'startTime' | 'endTime',
+    ampm: 'AM' | 'PM',
+  ) {
+    setCoursesForms((prev) =>
+      prev.map((c, i) => {
+        if (i !== courseIdx) return c;
+        return {
+          ...c,
+          slots: c.slots.map((s, j) => {
+            if (j !== slotIdx) return s;
+            // Split to preserve raw minute (never re-pad it here).
+            const [h24Raw, rawMin] = (s[field] || '00:00').split(':');
+            let h = parseInt(h24Raw || '0', 10) % 12;
+            if (ampm === 'PM') h += 12;
+            return { ...s, [field]: `${String(h).padStart(2, '0')}:${rawMin ?? '00'}` };
           }),
         };
       }),
@@ -578,9 +600,11 @@ export default function RoutinePage() {
           ...c,
           slots: c.slots.map((s, j) => {
             if (j !== slotIdx) return s;
-            const hh = padSegment(getHourPart(s[field]));
-            const mm = padSegment(getMinutePart(s[field]));
-            return { ...s, [field]: `${hh}:${mm}` };
+            // On blur: pad both parts to canonical "HH:MM".
+            const [h24Raw, rawMin] = (s[field] || '00:00').split(':');
+            const h = parseInt(h24Raw || '0', 10);
+            const m = parseInt(rawMin || '0', 10) || 0;
+            return { ...s, [field]: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}` };
           }),
         };
       }),
@@ -673,12 +697,12 @@ export default function RoutinePage() {
       endTime: s.endTime,
       label: s.courseCode || 'Existing course',
     }));
-    const draftSeen: { dayOfWeek: string; startTime: string; endTime: string; label: string }[] = [];
+    const draftSeen: { courseIdx: number; slotIdx: number; dayOfWeek: string; startTime: string; endTime: string; label: string; isAlternating: boolean }[] = [];
 
     coursesForms.forEach((course, courseIdx) => {
       course.slots.forEach((slot, slotIdx) => {
         const prefix = `Course ${course.courseCode || `#${courseIdx + 1}`}, slot ${slotIdx + 1}:`;
-        if (!slot.startTime || !slot.endTime || !isValidClockwiseRange(slot.startTime, slot.endTime)) {
+        if (!slot.startTime || !slot.endTime || !isValidRange(slot.startTime, slot.endTime)) {
           issues.push({
             courseIdx,
             slotIdx,
@@ -690,10 +714,12 @@ export default function RoutinePage() {
         for (const ex of existing) {
           if (ex.dayOfWeek !== slot.dayOfWeek) continue;
           if (!isOverlap(slot.startTime, slot.endTime, ex.startTime, ex.endTime)) continue;
+          // Alternating slots don't conflict with saved slots (they share the day intentionally).
+          if (slot.isAlternating) continue;
           issues.push({
             courseIdx,
             slotIdx,
-            message: `${prefix} schedule conflict (same day ${slot.dayOfWeek}) with ${ex.label} ${ex.startTime}-${ex.endTime}.`,
+            message: `${prefix} schedule conflict (same day ${slot.dayOfWeek}) with ${ex.label} ${ex.startTime}–${ex.endTime}.`,
           });
           return;
         }
@@ -701,19 +727,24 @@ export default function RoutinePage() {
         for (const seen of draftSeen) {
           if (seen.dayOfWeek !== slot.dayOfWeek) continue;
           if (!isOverlap(slot.startTime, slot.endTime, seen.startTime, seen.endTime)) continue;
+          // If BOTH sides are alternating weeks, allow the overlap.
+          if (slot.isAlternating && seen.isAlternating) continue;
           issues.push({
             courseIdx,
             slotIdx,
-            message: `${prefix} schedule conflict (same day ${slot.dayOfWeek}) with ${seen.label} ${seen.startTime}-${seen.endTime}.`,
+            message: `${prefix} schedule conflict (same day ${slot.dayOfWeek}) with ${seen.label} ${seen.startTime}–${seen.endTime}.`,
           });
           return;
         }
 
         draftSeen.push({
+          courseIdx,
+          slotIdx,
           dayOfWeek: slot.dayOfWeek,
           startTime: slot.startTime,
           endTime: slot.endTime,
           label: course.courseCode || `Course #${courseIdx + 1}`,
+          isAlternating: slot.isAlternating,
         });
       });
     });
@@ -953,7 +984,17 @@ export default function RoutinePage() {
                     {course.slots.map((slot, si) => {
                       const slotConflict = draftConflictMap.get(`${ci}-${si}`);
                       const invalidRange =
-                        !slot.startTime || !slot.endTime || !isValidClockwiseRange(slot.startTime, slot.endTime);
+                        !slot.startTime || !slot.endTime || !isValidRange(slot.startTime, slot.endTime);
+                      // Derive display parts directly from stored string so raw (unpadded)
+                      // minutes are shown during live typing (e.g. "4" before completing "40").
+                      const [sH24Raw, sMinRaw] = (slot.startTime || '09:00').split(':');
+                      const [eH24Raw, eMinRaw] = (slot.endTime || '10:30').split(':');
+                      const sH24 = parseInt(sH24Raw || '9', 10);
+                      const eH24 = parseInt(eH24Raw || '10', 10);
+                      const startHour12 = String(sH24 % 12 || 12);
+                      const endHour12 = String(eH24 % 12 || 12);
+                      const startAmPm: 'AM' | 'PM' = sH24 >= 12 ? 'PM' : 'AM';
+                      const endAmPm: 'AM' | 'PM' = eH24 >= 12 ? 'PM' : 'AM';
                       return (
                       <div
                         key={si}
@@ -981,94 +1022,114 @@ export default function RoutinePage() {
                             ))}
                           </select>
                         </div>
-                        <div className="min-w-28">
+                        {/* Start Time — 12h + AM/PM */}
+                        <div className="min-w-36">
                           <label className="text-xs text-text-muted">Start Time</label>
-                          <div
-                            className={`input text-sm transition-colors flex items-center justify-center gap-0.5 px-2 py-1.5 ${
-                              invalidRange
-                                ? 'border-danger focus-within:ring-2 focus-within:ring-danger focus-within:border-danger bg-red-50/50'
-                                : 'focus-within:ring-2 focus-within:ring-primary/40 focus-within:border-primary'
-                            }`}
-                            aria-invalid={invalidRange}
-                          >
-                            <input
-                              ref={(el) => {
-                                segmentRefs.current[`${ci}-${si}-sh`] = el;
-                              }}
-                              type="text"
-                              inputMode="numeric"
-                              maxLength={2}
-                              aria-label="Start Time hour"
-                              placeholder="HH"
-                              className="w-8 bg-transparent text-center outline-none tabular-nums"
-                              value={getHourPart(slot.startTime)}
-                              onFocus={(e) => e.currentTarget.select()}
-                              onChange={(e) => updateTimeSegment(ci, si, 'startTime', 'hour', e.target.value)}
-                              onBlur={() => normalizeTimeSegment(ci, si, 'startTime')}
-                              onKeyDown={(e) => handleSegmentArrowNav(e, ci, si, 'sh')}
-                            />
-                            <span className="text-text-muted">:</span>
-                            <input
-                              ref={(el) => {
-                                segmentRefs.current[`${ci}-${si}-sm`] = el;
-                              }}
-                              type="text"
-                              inputMode="numeric"
-                              maxLength={2}
-                              aria-label="Start Time minute"
-                              placeholder="MM"
-                              className="w-8 bg-transparent text-center outline-none tabular-nums"
-                              value={getMinutePart(slot.startTime)}
-                              onFocus={(e) => e.currentTarget.select()}
-                              onChange={(e) => updateTimeSegment(ci, si, 'startTime', 'minute', e.target.value)}
-                              onBlur={() => normalizeTimeSegment(ci, si, 'startTime')}
-                              onKeyDown={(e) => handleSegmentArrowNav(e, ci, si, 'sm')}
-                            />
+                          <div className="flex items-center gap-1">
+                            <div
+                              className={`input text-sm transition-colors flex items-center justify-center gap-0.5 px-2 py-1.5 flex-1 ${
+                                invalidRange
+                                  ? 'border-danger focus-within:ring-2 focus-within:ring-danger focus-within:border-danger bg-red-50/50'
+                                  : 'focus-within:ring-2 focus-within:ring-primary/40 focus-within:border-primary'
+                              }`}
+                              aria-invalid={invalidRange}
+                            >
+                              <input
+                                ref={(el) => { segmentRefs.current[`${ci}-${si}-sh`] = el; }}
+                                type="text"
+                                inputMode="numeric"
+                                maxLength={2}
+                                aria-label="Start Time hour"
+                                placeholder="h"
+                                className="w-6 bg-transparent text-center outline-none tabular-nums"
+                                value={startHour12}
+                                onFocus={(e) => e.currentTarget.select()}
+                                onChange={(e) => updateTimeSegment(ci, si, 'startTime', 'hour', e.target.value)}
+                                onBlur={() => normalizeTimeSegment(ci, si, 'startTime')}
+                                onKeyDown={(e) => handleSegmentArrowNav(e, ci, si, 'sh')}
+                              />
+                              <span className="text-text-muted">:</span>
+                              <input
+                                ref={(el) => { segmentRefs.current[`${ci}-${si}-sm`] = el; }}
+                                type="text"
+                                inputMode="numeric"
+                                maxLength={2}
+                                aria-label="Start Time minute"
+                                placeholder="mm"
+                                className="w-7 bg-transparent text-center outline-none tabular-nums"
+                                value={sMinRaw ?? '00'}
+                                onFocus={(e) => e.currentTarget.select()}
+                                onChange={(e) => updateTimeSegment(ci, si, 'startTime', 'minute', e.target.value)}
+                                onBlur={() => normalizeTimeSegment(ci, si, 'startTime')}
+                                onKeyDown={(e) => handleSegmentArrowNav(e, ci, si, 'sm')}
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              className={`text-[10px] font-semibold px-1.5 py-1 rounded border transition-colors ${
+                                startAmPm === 'AM'
+                                  ? 'bg-primary text-white border-primary'
+                                  : 'bg-bg-main text-text-muted border-border hover:border-primary'
+                              }`}
+                              onClick={() => updateAmPm(ci, si, 'startTime', startAmPm === 'AM' ? 'PM' : 'AM')}
+                            >
+                              {startAmPm}
+                            </button>
                           </div>
                         </div>
-                        <div className="min-w-28">
+                        {/* End Time — 12h + AM/PM */}
+                        <div className="min-w-36">
                           <label className="text-xs text-text-muted">End Time</label>
-                          <div
-                            className={`input text-sm transition-colors flex items-center justify-center gap-0.5 px-2 py-1.5 ${
-                              invalidRange
-                                ? 'border-danger focus-within:ring-2 focus-within:ring-danger focus-within:border-danger bg-red-50/50'
-                                : 'focus-within:ring-2 focus-within:ring-primary/40 focus-within:border-primary'
-                            }`}
-                            aria-invalid={invalidRange}
-                          >
-                            <input
-                              ref={(el) => {
-                                segmentRefs.current[`${ci}-${si}-eh`] = el;
-                              }}
-                              type="text"
-                              inputMode="numeric"
-                              maxLength={2}
-                              aria-label="End Time hour"
-                              placeholder="HH"
-                              className="w-8 bg-transparent text-center outline-none tabular-nums"
-                              value={getHourPart(slot.endTime)}
-                              onFocus={(e) => e.currentTarget.select()}
-                              onChange={(e) => updateTimeSegment(ci, si, 'endTime', 'hour', e.target.value)}
-                              onBlur={() => normalizeTimeSegment(ci, si, 'endTime')}
-                              onKeyDown={(e) => handleSegmentArrowNav(e, ci, si, 'eh')}
-                            />
-                            <span className="text-text-muted">:</span>
-                            <input
-                              ref={(el) => {
-                                segmentRefs.current[`${ci}-${si}-em`] = el;
-                              }}
-                              type="text"
-                              inputMode="numeric"
-                              maxLength={2}
-                              aria-label="End Time minute"
-                              placeholder="MM"
-                              className="w-8 bg-transparent text-center outline-none tabular-nums"
-                              value={getMinutePart(slot.endTime)}
-                              onFocus={(e) => e.currentTarget.select()}
-                              onChange={(e) => updateTimeSegment(ci, si, 'endTime', 'minute', e.target.value)}
-                              onBlur={() => normalizeTimeSegment(ci, si, 'endTime')}
-                              onKeyDown={(e) => handleSegmentArrowNav(e, ci, si, 'em')}
-                            />
+                          <div className="flex items-center gap-1">
+                            <div
+                              className={`input text-sm transition-colors flex items-center justify-center gap-0.5 px-2 py-1.5 flex-1 ${
+                                invalidRange
+                                  ? 'border-danger focus-within:ring-2 focus-within:ring-danger focus-within:border-danger bg-red-50/50'
+                                  : 'focus-within:ring-2 focus-within:ring-primary/40 focus-within:border-primary'
+                              }`}
+                              aria-invalid={invalidRange}
+                            >
+                              <input
+                                ref={(el) => { segmentRefs.current[`${ci}-${si}-eh`] = el; }}
+                                type="text"
+                                inputMode="numeric"
+                                maxLength={2}
+                                aria-label="End Time hour"
+                                placeholder="h"
+                                className="w-6 bg-transparent text-center outline-none tabular-nums"
+                                value={endHour12}
+                                onFocus={(e) => e.currentTarget.select()}
+                                onChange={(e) => updateTimeSegment(ci, si, 'endTime', 'hour', e.target.value)}
+                                onBlur={() => normalizeTimeSegment(ci, si, 'endTime')}
+                                onKeyDown={(e) => handleSegmentArrowNav(e, ci, si, 'eh')}
+                              />
+                              <span className="text-text-muted">:</span>
+                              <input
+                                ref={(el) => { segmentRefs.current[`${ci}-${si}-em`] = el; }}
+                                type="text"
+                                inputMode="numeric"
+                                maxLength={2}
+                                aria-label="End Time minute"
+                                placeholder="mm"
+                                className="w-7 bg-transparent text-center outline-none tabular-nums"
+                                value={eMinRaw ?? '30'}
+                                onFocus={(e) => e.currentTarget.select()}
+                                onChange={(e) => updateTimeSegment(ci, si, 'endTime', 'minute', e.target.value)}
+                                onBlur={() => normalizeTimeSegment(ci, si, 'endTime')}
+                                onKeyDown={(e) => handleSegmentArrowNav(e, ci, si, 'em')}
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              className={`text-[10px] font-semibold px-1.5 py-1 rounded border transition-colors ${
+                                endAmPm === 'PM'
+                                  ? 'bg-primary text-white border-primary'
+                                  : 'bg-bg-main text-text-muted border-border hover:border-primary'
+                              }`}
+                              onClick={() => updateAmPm(ci, si, 'endTime', endAmPm === 'AM' ? 'PM' : 'AM')}
+                            >
+                              {endAmPm}
+                            </button>
                           </div>
                         </div>
                         <div className="min-w-24">
@@ -1101,15 +1162,38 @@ export default function RoutinePage() {
                           </button>
                         )}
                         </div>
+                        {slot.isAlternating && (
+                          <div className="mt-1.5 inline-flex items-center rounded-full bg-amber-100 border border-amber-200 px-2.5 py-0.5 text-[10px] font-semibold text-amber-800 gap-1">
+                            <span>⇄</span>
+                            <span>Alternating Week</span>
+                          </div>
+                        )}
                         {slotConflict && (
-                          <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 flex items-start gap-2">
-                            <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-amber-800">
-                              Conflict
-                            </span>
-                            <div className="flex items-start gap-1.5">
-                              <AlertTriangle size={12} className="mt-0.5 shrink-0 text-amber-700" />
-                              <span>{slotConflict}</span>
+                          <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900">
+                            <div className="flex items-start gap-2">
+                              <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-amber-800 shrink-0">
+                                Conflict
+                              </span>
+                              <div className="flex items-start gap-1.5 flex-1">
+                                <AlertTriangle size={12} className="mt-0.5 shrink-0 text-amber-700" />
+                                <span>{slotConflict}</span>
+                              </div>
                             </div>
+                            {!slot.isAlternating && (
+                              <button
+                                type="button"
+                                className="mt-1.5 text-[10px] text-amber-800 underline hover:text-amber-900 font-medium"
+                                onClick={() => {
+                                  setAlternatingPrompt({
+                                    courseIdx: ci,
+                                    slotIdx: si,
+                                    conflictLabel: slotConflict,
+                                  });
+                                }}
+                              >
+                                Is this an alternating week course?
+                              </button>
+                            )}
                           </div>
                         )}
                         {invalidRange && (
@@ -1470,6 +1554,74 @@ export default function RoutinePage() {
                 disabled={moveSlotMutation.isPending || updateSlotMutation.isPending}
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Alternating Week Confirmation Dialog */}
+      {alternatingPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl p-6 max-w-sm w-full mx-4 border border-border">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-lg">⇄</span>
+              <h3 className="font-semibold text-text-main">Alternating Week Course?</h3>
+            </div>
+            <p className="text-sm text-text-muted mb-5">
+              This slot conflicts with another slot on the same day and time. Is this an{' '}
+              <strong className="text-amber-700">alternating week lab</strong> (Week 1 / Week 2 rotation)?
+            </p>
+            <div className="flex gap-3">
+              <button
+                className="flex-1 btn-primary bg-amber-500 hover:bg-amber-600 border-amber-500 hover:border-amber-600"
+                onClick={() => {
+                  const { courseIdx, slotIdx } = alternatingPrompt;
+                  // Mark the current slot as alternating.
+                  setCoursesForms((prev) =>
+                    prev.map((c, ci) => {
+                      if (ci !== courseIdx) return c;
+                      return {
+                        ...c,
+                        slots: c.slots.map((s, si) => {
+                          if (si !== slotIdx) return s;
+                          return { ...s, isAlternating: true };
+                        }),
+                      };
+                    }),
+                  );
+                  // Also mark any conflicting draft slot as alternating.
+                  const target = coursesForms[courseIdx]?.slots[slotIdx];
+                  if (target) {
+                    setCoursesForms((prev) =>
+                      prev.map((c, ci) =>
+                        ci === courseIdx
+                          ? c
+                          : {
+                              ...c,
+                              slots: c.slots.map((s) => {
+                                if (
+                                  s.dayOfWeek === target.dayOfWeek &&
+                                  isOverlap(s.startTime, s.endTime, target.startTime, target.endTime)
+                                ) {
+                                  return { ...s, isAlternating: true };
+                                }
+                                return s;
+                              }),
+                            },
+                      ),
+                    );
+                  }
+                  setAlternatingPrompt(null);
+                }}
+              >
+                Yes, alternating week
+              </button>
+              <button
+                className="flex-1 btn-secondary"
+                onClick={() => setAlternatingPrompt(null)}
+              >
+                No, keep error
               </button>
             </div>
           </div>

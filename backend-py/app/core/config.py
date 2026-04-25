@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
+_REPO_DIR = _BACKEND_DIR.parent
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=["../.env", ".env"],  # root .env first, then backend-py/.env
+        env_file=[_REPO_DIR / ".env", _BACKEND_DIR / ".env"],
         env_file_encoding="utf-8",
+        env_ignore_empty=True,
         extra="ignore",
     )
 
@@ -46,12 +52,19 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:5173"
     NODE_ENV: str = "development"
 
+    EMAIL_PROVIDER: str = "smtp"
+    EMAIL_FROM_NAME: str = "Cognitive Copilot"
+    EMAIL_FROM_ADDRESS: str | None = None
+    EMAIL_REPLY_TO: str | None = None
+
     SMTP_HOST: str | None = None
     SMTP_PORT: int = 587
     SMTP_USER: str | None = None
     SMTP_PASS: str | None = None
-    SMTP_FROM: str = "noreply@cognitivecopilot.com"
+    SMTP_FROM: str | None = None
     SMTP_USE_TLS: bool = True
+    RESEND_API_KEY: str | None = None
+    RESEND_BASE_URL: str = "https://api.resend.com"
     FRONTEND_URL: str = "http://localhost:5173"
     GOOGLE_CLIENT_ID: str | None = None
     GOOGLE_CLIENT_SECRET: str | None = None
@@ -74,6 +87,30 @@ class Settings(BaseSettings):
     @property
     def jwt_refresh_seconds(self) -> int:
         return _parse_duration(self.JWT_REFRESH_EXPIRES)
+
+    @property
+    def email_provider(self) -> str:
+        return self.EMAIL_PROVIDER.strip().lower()
+
+    @property
+    def email_from_address(self) -> str:
+        if self.EMAIL_FROM_ADDRESS and self.EMAIL_FROM_ADDRESS.strip():
+            return self.EMAIL_FROM_ADDRESS.strip()
+        if self.SMTP_FROM and self.SMTP_FROM.strip():
+            return self.SMTP_FROM.strip()
+        if self.SMTP_USER and self.SMTP_USER.strip():
+            return self.SMTP_USER.strip()
+        return "noreply@cognitivecopilot.com"
+
+    @property
+    def email_from_header(self) -> str:
+        if self.EMAIL_FROM_NAME.strip():
+            return f"{self.EMAIL_FROM_NAME.strip()} <{self.email_from_address}>"
+        return self.email_from_address
+
+    @property
+    def resend_base_url(self) -> str:
+        return self.RESEND_BASE_URL.rstrip("/")
 
 
 def _parse_duration(s: str) -> int:

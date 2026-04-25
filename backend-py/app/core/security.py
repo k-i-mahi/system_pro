@@ -7,6 +7,7 @@ import jwt
 
 from app.core.config import settings
 
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
 
@@ -18,18 +19,24 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def _make_token(user_id: str, token_type: str, expires_in: int) -> str:
+def _make_token(user_id: str, token_type: str, expires_in: int, auth_version: int = 0) -> str:
     now = int(datetime.now(timezone.utc).timestamp())
-    payload = {"userId": user_id, "type": token_type, "iat": now, "exp": now + expires_in}
+    payload = {
+        "userId": user_id,
+        "type": token_type,
+        "iat": now,
+        "exp": now + expires_in,
+        "authVersion": auth_version,
+    }
     return jwt.encode(payload, settings.AUTH_SECRET, algorithm="HS256")
 
 
-def generate_access_token(user_id: str) -> str:
-    return _make_token(user_id, "access", settings.jwt_access_seconds)
+def generate_access_token(user_id: str, auth_version: int = 0) -> str:
+    return _make_token(user_id, "access", settings.jwt_access_seconds, auth_version)
 
 
-def generate_refresh_token(user_id: str) -> str:
-    return _make_token(user_id, "refresh", settings.jwt_refresh_seconds)
+def generate_refresh_token(user_id: str, auth_version: int = 0) -> str:
+    return _make_token(user_id, "refresh", settings.jwt_refresh_seconds, auth_version)
 
 
 def decode_token(token: str) -> dict:

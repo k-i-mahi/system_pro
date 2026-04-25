@@ -15,21 +15,36 @@ export default function LoginPage() {
   const [formError, setFormError] = useState('');
   const requestSeqRef = useRef(0);
 
+  const KUET_EMAIL_RE = /^[a-z0-9]+@([a-z]+\.)?kuet\.ac\.bd$/i;
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     requestSeqRef.current += 1;
     const requestSeq = requestSeqRef.current;
     setFormError('');
-    if (!email.trim() && !password.trim()) {
+
+    const emailEmpty = !email.trim();
+    const passwordEmpty = !password.trim();
+    const emailInvalid = !KUET_EMAIL_RE.test(email.trim());
+
+    if (emailEmpty && passwordEmpty) {
       setFormError('Email or Password cannot be empty');
       return;
     }
-    if (!email.trim()) {
+    if (emailEmpty) {
       setFormError('Email cannot be empty');
       return;
     }
-    if (!password.trim()) {
+    if (emailInvalid && passwordEmpty) {
+      setFormError('Incorrect Email and Password');
+      return;
+    }
+    if (passwordEmpty) {
       setFormError('Password cannot be empty');
+      return;
+    }
+    if (emailInvalid) {
+      setFormError('Use verified educational mails only');
       return;
     }
     setLoading(true);

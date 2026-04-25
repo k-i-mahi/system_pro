@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-import secrets
 import re
+import secrets
 from urllib.parse import quote
 
 import redis.asyncio as aioredis
@@ -18,8 +18,8 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
-from app.models.user import User
 from app.models.enums import Role
+from app.models.user import User
 from app.schemas.auth import (
     ForgotPasswordRequest,
     LoginRequest,
@@ -50,6 +50,26 @@ def _email_ok_for_role(email: str, role: Role) -> bool:
     return True
 
 
+async def _get_auth_version(redis: aioredis.Redis, user_id: str) -> int:
+    value = await redis.get(f"authv:{user_id}")
+    return int(value) if value is not None else 0
+
+
+async def _issue_token_pair(redis: aioredis.Redis, user_id: str) -> tuple[str, str]:
+    auth_version = await _get_auth_version(redis, user_id)
+    access = generate_access_token(user_id, auth_version)
+    refresh = generate_refresh_token(user_id, auth_version)
+    await redis.set(f"rt:{user_id}:{refresh}", "1", ex=_RT_TTL)
+    return access, refresh
+
+
+async def _revoke_user_sessions(redis: aioredis.Redis, user_id: str) -> None:
+    await redis.incr(f"authv:{user_id}")
+    refresh_keys = [key async for key in redis.scan_iter(match=f"rt:{user_id}:*")]
+    if refresh_keys:
+        await redis.delete(*refresh_keys)
+
+
 async def register(db: AsyncSession, redis: aioredis.Redis, body: RegisterRequest) -> dict:
     result = await db.execute(select(User).where(User.email == body.email))
     if result.scalar_one_or_none():
@@ -66,9 +86,7 @@ async def register(db: AsyncSession, redis: aioredis.Redis, body: RegisterReques
     await db.commit()
     await db.refresh(user)
 
-    access = generate_access_token(user.id)
-    refresh = generate_refresh_token(user.id)
-    await redis.set(f"rt:{user.id}:{refresh}", "1", ex=_RT_TTL)
+    access, refresh = await _issue_token_pair(redis, user.id)
 
     return {"accessToken": access, "refreshToken": refresh, "user": UserPublic.from_orm_user(user).model_dump()}
 
@@ -86,9 +104,7 @@ async def login(db: AsyncSession, redis: aioredis.Redis, body: LoginRequest) -> 
     if not verify_password(body.password, user.password_hash):
         raise UnauthorizedError("Password incorrect", code="INVALID_PASSWORD")
 
-    access = generate_access_token(user.id)
-    refresh = generate_refresh_token(user.id)
-    await redis.set(f"rt:{user.id}:{refresh}", "1", ex=_RT_TTL)
+    access, refresh = await _issue_token_pair(redis, user.id)
 
     return {"accessToken": access, "refreshToken": refresh, "user": UserPublic.from_orm_user(user).model_dump()}
 
@@ -105,14 +121,17 @@ async def refresh_tokens(redis: aioredis.Redis, body: RefreshRequest) -> dict:
         raise UnauthorizedError("Not a refresh token", code="INVALID_TOKEN")
 
     user_id: str = payload["userId"]
+    token_auth_version = int(payload.get("authVersion", 0))
+    current_auth_version = await _get_auth_version(redis, user_id)
+    if token_auth_version != current_auth_version:
+        raise UnauthorizedError("Refresh token expired or revoked", code="INVALID_TOKEN")
+
     stored = await redis.get(f"rt:{user_id}:{body.refreshToken}")
     if not stored:
         raise UnauthorizedError("Refresh token expired or revoked", code="INVALID_TOKEN")
 
     await redis.delete(f"rt:{user_id}:{body.refreshToken}")
-    new_access = generate_access_token(user_id)
-    new_refresh = generate_refresh_token(user_id)
-    await redis.set(f"rt:{user_id}:{new_refresh}", "1", ex=_RT_TTL)
+    new_access, new_refresh = await _issue_token_pair(redis, user_id)
 
     return {"accessToken": new_access, "refreshToken": new_refresh}
 
@@ -132,9 +151,11 @@ async def forgot_password(db: AsyncSession, redis: aioredis.Redis, body: ForgotP
 
     reset_token = secrets.token_urlsafe(32)
     await redis.set(f"reset:{reset_token}", body.email, ex=_RESET_TTL)
-    reset_link = f"{settings.FRONTEND_URL}/reset-password?token={quote(reset_token)}"
+    reset_link = f"{settings.FRONTEND_URL.rstrip('/')}/reset-password?token={quote(reset_token)}"
     try:
         await send_password_reset_email(body.email, reset_link)
+        if settings.NODE_ENV.lower() != "production":
+            logger.info("Development password reset link for %s: %s", body.email, reset_link)
     except RuntimeError as exc:
         # Clean up the token so it cannot be used if the email was never delivered.
         await redis.delete(f"reset:{reset_token}")
@@ -164,6 +185,7 @@ async def reset_password(db: AsyncSession, redis: aioredis.Redis, body: ResetPas
 
     user.password_hash = hash_password(body.newPassword)
     await db.commit()
+    await _revoke_user_sessions(redis, user.id)
     await redis.delete(f"reset:{body.token}")
 
 
