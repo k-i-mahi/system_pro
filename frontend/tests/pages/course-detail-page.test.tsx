@@ -4,11 +4,23 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CourseDetailPage from '../../src/pages/courses/CourseDetailPage';
 
+vi.mock('../../src/stores/auth.store', () => ({
+  useAuthStore: Object.assign(
+    vi.fn((selector: (s: { user: { id: string; role: string; email: string } | null }) => unknown) =>
+      selector({
+        user: { id: 'student-1', role: 'STUDENT', email: 'student@test.edu' },
+      })
+    ),
+    { getState: () => ({ user: null }), setState: vi.fn() }
+  ),
+}));
+
 const mockCourse = {
   id: 'c1',
   courseCode: 'CS 101',
   courseName: 'Intro to Computer Science',
   description: 'Learn the basics of CS',
+  viewerRole: 'STUDENT',
   enrollment: { ctScore1: 17, ctScore2: 15, ctScore3: null, labScore: 35 },
   topics: [
     {
@@ -117,11 +129,12 @@ describe('CourseDetailPage', () => {
     });
   });
 
-  it('shows mastery percentage', async () => {
+  it('shows score progress percentage from enrollment', async () => {
     renderPage();
     await waitFor(() => {
       expect(screen.getAllByText('85%').length).toBeGreaterThan(0);
     });
-    expect(screen.getAllByText('40%').length).toBeGreaterThan(0);
+    // Class Test 2: 15/20 = 75%
+    expect(screen.getAllByText('75%').length).toBeGreaterThan(0);
   });
 });

@@ -81,12 +81,44 @@ async def ensure_course_member_or_admin(
         raise ForbiddenError("You are not enrolled in this course")
 
 
+async def is_classroom_owner_for_course(db: AsyncSession, user, course_id: str) -> bool:
+    """True for admins, or tutors who *created* the community (classroom) for this course."""
+    if user.role == Role.ADMIN:
+        return True
+    if user.role != Role.TUTOR:
+        return False
+    row = (
+        await db.execute(
+            select(Community.id).where(
+                Community.course_id == course_id,
+                Community.created_by == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
+async def ensure_classroom_owner_for_course_or_admin(db: AsyncSession, user, course_id: str) -> None:
+    """Raise 403 unless admin or the tutor who created the classroom for this course."""
+    if not await is_classroom_owner_for_course(db, user, course_id):
+        if user.role == Role.TUTOR:
+            raise ForbiddenError(
+                "Only the instructor who created the classroom for this course can manage the shared class schedule "
+                "and materials. Co-tutors should add content from the classroom view."
+            )
+        raise ForbiddenError("You don't have permission to manage course content for this course.")
+
+
 async def ensure_course_tutor_or_admin(
     db: AsyncSession,
     user,
     course_id: str,
 ) -> None:
-    """Raise 403 unless the user is a TUTOR in a community for this course or admin."""
+    """Raise 403 unless the user is a TUTOR in a community for this course or admin.
+
+    Prefer ensure_classroom_owner_for_course_or_admin for course *materials* and shared topics
+    (only the classroom owner may edit those; co-tutors are still tutors in the community).
+    """
     if user.role == Role.ADMIN:
         return
     if user.role not in (Role.TUTOR, Role.ADMIN):

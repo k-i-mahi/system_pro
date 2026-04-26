@@ -8,7 +8,7 @@ from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.permissions import ensure_course_tutor_or_admin
+from app.core.permissions import ensure_classroom_owner_for_course_or_admin, is_classroom_owner_for_course
 from app.core.timezones import user_timezone
 from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.models.community import Community, CommunityMember
@@ -26,22 +26,51 @@ from app.schemas.courses import (
 )
 from app.services import notification_service
 from app.services import cloudinary_service
-from app.services.ingest_service import ingest_material_with_new_session
+from app.services.ingest_service import ingest_material_resilient
 from app.workers.queues import enqueue_ingest
 
 logger = logging.getLogger(__name__)
 
 
+def _ingest_background_done(task: asyncio.Task) -> None:
+    try:
+        exc = task.exception()
+        if exc is not None:
+            logger.exception("Background ingest task raised: %s", exc)
+            return
+        result = task.result()
+        if isinstance(result, dict) and not result.get("ok"):
+            logger.error("Ingest failed: material=%s error=%s", result.get("materialId"), result.get("error"))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Ingest task callback error: %s", e)
+
+
 async def _schedule_material_ingest(material_id: str, user_id: str, quality: str) -> None:
-    """Index file for RAG: either ARQ job (separate worker) or asyncio task in this process (default)."""
+    """Index for RAG: ARQ queue, or in-process (optionally await until embeddings are stored)."""
     if settings.INGEST_USE_ARQ_QUEUE:
+        if settings.INGEST_AWAIT:
+            logger.warning(
+                "INGEST_USE_ARQ_QUEUE is on — Ask Course indexing runs in the ARQ worker; "
+                "set INGEST_USE_ARQ_QUEUE=false to wait for ingest in the API process."
+            )
         try:
             await enqueue_ingest(material_id, user_id, quality)
         except Exception as exc:
             logger.warning("Queue enqueue failed for %s, using local fallback: %s", material_id, exc)
-            asyncio.create_task(ingest_material_with_new_session(material_id, user_id, quality))
-    else:
-        asyncio.create_task(ingest_material_with_new_session(material_id, user_id, quality))
+            await _run_ingest_local(material_id, user_id, quality)
+        return
+
+    await _run_ingest_local(material_id, user_id, quality)
+
+
+async def _run_ingest_local(material_id: str, user_id: str, quality: str) -> None:
+    if settings.INGEST_AWAIT:
+        result = await ingest_material_resilient(material_id, user_id, quality)
+        if not result.get("ok"):
+            logger.error("Ingest failed for %s: %s", material_id, result.get("error"))
+        return
+    task = asyncio.create_task(ingest_material_resilient(material_id, user_id, quality))
+    task.add_done_callback(_ingest_background_done)
 
 
 def _course_to_dict(c: Course) -> dict:
@@ -209,7 +238,48 @@ async def _require_course_manager(db: AsyncSession, course_id: str, user_id: str
     user = await db.get(User, user_id)
     if not user:
         raise NotFoundError("User not found")
-    await ensure_course_tutor_or_admin(db, user, course_id)
+    await ensure_classroom_owner_for_course_or_admin(db, user, course_id)
+
+
+async def _is_course_material_editor(db: AsyncSession, course_id: str, user_id: str) -> bool:
+    """True if admin or the classroom *owner* tutor (can edit shared topics/materials)."""
+    user = await db.get(User, user_id)
+    if not user:
+        return False
+    return await is_classroom_owner_for_course(db, user, course_id)
+
+
+async def _require_topic_student_owner_or_editor(
+    db: AsyncSession, course_id: str, topic_id: str, user_id: str
+) -> Topic:
+    """Classroom owner or admin: shared topics. Enrolled student: only personal topics they created."""
+    topic = await _require_topic(db, course_id, topic_id)
+    if await _is_course_material_editor(db, course_id, user_id):
+        return topic
+    user = await db.get(User, user_id)
+    if user and user.role == Role.TUTOR:
+        raise ForbiddenError(
+            "Only the instructor who created the classroom for this course can edit the shared class schedule. "
+            "Co-tutors should add materials from the classroom."
+        )
+    if not user or user.role != Role.STUDENT:
+        raise ForbiddenError("You don't have permission to change this topic or its materials.")
+    enr = (
+        await db.execute(
+            select(Enrollment.id).where(
+                Enrollment.user_id == user_id,
+                Enrollment.course_id == course_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not enr:
+        raise ForbiddenError("You are not enrolled in this course.")
+    if topic.is_personal and topic.created_by == user_id:
+        return topic
+    raise ForbiddenError(
+        "You can only add or edit materials on your own study topics. "
+        'Use "Add Topic" or "Log Topic" to create one, then upload files there.'
+    )
 
 
 async def _require_reingest_access(db: AsyncSession, course_id: str, user_id: str) -> None:
@@ -287,10 +357,12 @@ async def _teaching_context(db: AsyncSession, course_id: str, user_id: str | Non
         return context
 
     community_id, community_name, community_role = member_row
+    comm = await db.get(Community, community_id)
     is_tutor = community_role == CommunityRole.TUTOR
+    is_classroom_owner = bool(comm and comm.created_by == user_id)
     return {
         "isTeaching": is_tutor,
-        "canManage": is_tutor,
+        "canManage": is_classroom_owner and is_tutor,
         "communityId": community_id,
         "communityName": community_name,
         "viewerRole": "TUTOR" if is_tutor else "STUDENT",
@@ -722,8 +794,7 @@ async def create_topic(db: AsyncSession, course_id: str, body: CreateTopicReques
 
 
 async def update_topic(db: AsyncSession, course_id: str, topic_id: str, body: UpdateTopicRequest, user_id: str) -> dict:
-    await _require_course_manager(db, course_id, user_id)
-    topic = await _require_topic(db, course_id, topic_id)
+    topic = await _require_topic_student_owner_or_editor(db, course_id, topic_id, user_id)
 
     updates = body.model_dump(exclude_unset=True)
     if "weekNumber" in updates:
@@ -768,8 +839,7 @@ async def delete_topic(db: AsyncSession, topic_id: str) -> None:
 
 
 async def delete_topic_for_course(db: AsyncSession, course_id: str, topic_id: str, user_id: str) -> None:
-    await _require_course_manager(db, course_id, user_id)
-    await _require_topic(db, course_id, topic_id)
+    await _require_topic_student_owner_or_editor(db, course_id, topic_id, user_id)
     await delete_topic(db, topic_id)
 
 
@@ -795,9 +865,7 @@ async def upload_material(
     file_type: str | None,
     quality: str | None,
 ) -> dict:
-    await _require_course_manager(db, course_id, user_id)
-    await _require_topic(db, course_id, topic_id)
-    topic = await db.get(Topic, topic_id)
+    topic = await _require_topic_student_owner_or_editor(db, course_id, topic_id, user_id)
     course = await _require_course(db, course_id)
     teaching_context = await _teaching_context(db, course_id, user_id)
 
@@ -817,27 +885,39 @@ async def upload_material(
     db.add(material)
     await db.flush()
     await db.refresh(material)
+    new_material_id = material.id
+    new_material_title = material.title or original_filename
 
-    # Fire-and-forget ingest (non-link materials only)
+    # Commit before background RAG ingest: ingest uses a separate session and must see this row.
+    await db.commit()
+
     if mat_type != MaterialType.LINK:
-        await _schedule_material_ingest(material.id, user_id, quality or "fast")
+        await _schedule_material_ingest(new_material_id, user_id, quality or "fast")
 
-    await _notify_course_students(
-        db,
-        course_id,
-        title=f"New material in {course.course_code}",
-        body=f"{material.title} was added under {topic.title if topic else 'this course'}.",
-        notification_key_prefix=f"material_upload:{material.id}",
-        metadata={
-            "kind": "COURSE_MATERIAL_UPLOADED",
-            "courseId": course_id,
-            "courseCode": course.course_code,
-            "topicId": topic_id,
-            "materialId": material.id,
-            "communityId": teaching_context["communityId"],
-            "deepLink": f"/courses/{course_id}",
-        },
-    )
+    # Notifications (second transaction) — topic/course may be expired after the first commit.
+    topic = await db.get(Topic, topic_id)
+    course = await db.get(Course, course_id)
+    material = await db.get(Material, new_material_id)
+    if not material or not course or not topic:
+        raise NotFoundError("Material not found after upload")
+
+    if not topic.is_personal:
+        await _notify_course_students(
+            db,
+            course_id,
+            title=f"New material in {course.course_code}",
+            body=f"{new_material_title} was added under {topic.title if topic else 'this course'}.",
+            notification_key_prefix=f"material_upload:{new_material_id}",
+            metadata={
+                "kind": "COURSE_MATERIAL_UPLOADED",
+                "courseId": course_id,
+                "courseCode": course.course_code,
+                "topicId": topic_id,
+                "materialId": new_material_id,
+                "communityId": teaching_context["communityId"],
+                "deepLink": f"/courses/{course_id}",
+            },
+        )
 
     await db.commit()
     await db.refresh(material)
@@ -852,9 +932,7 @@ async def add_material_link(
     body: AddMaterialLinkRequest,
     user_id: str,
 ) -> dict:
-    await _require_course_manager(db, course_id, user_id)
-    await _require_topic(db, course_id, topic_id)
-    topic = await db.get(Topic, topic_id)
+    topic = await _require_topic_student_owner_or_editor(db, course_id, topic_id, user_id)
     course = await _require_course(db, course_id)
     teaching_context = await _teaching_context(db, course_id, user_id)
 
@@ -868,22 +946,23 @@ async def add_material_link(
     await db.flush()
     await db.refresh(material)
 
-    await _notify_course_students(
-        db,
-        course_id,
-        title=f"New material in {course.course_code}",
-        body=f"{material.title} was added under {topic.title if topic else 'this course'}.",
-        notification_key_prefix=f"material_upload:{material.id}",
-        metadata={
-            "kind": "COURSE_MATERIAL_UPLOADED",
-            "courseId": course_id,
-            "courseCode": course.course_code,
-            "topicId": topic_id,
-            "materialId": material.id,
-            "communityId": teaching_context["communityId"],
-            "deepLink": f"/courses/{course_id}",
-        },
-    )
+    if not topic.is_personal:
+        await _notify_course_students(
+            db,
+            course_id,
+            title=f"New material in {course.course_code}",
+            body=f"{material.title} was added under {topic.title if topic else 'this course'}.",
+            notification_key_prefix=f"material_upload:{material.id}",
+            metadata={
+                "kind": "COURSE_MATERIAL_UPLOADED",
+                "courseId": course_id,
+                "courseCode": course.course_code,
+                "topicId": topic_id,
+                "materialId": material.id,
+                "communityId": teaching_context["communityId"],
+                "deepLink": f"/courses/{course_id}",
+            },
+        )
     await db.commit()
     await db.refresh(material)
     return _material_to_dict(material)
@@ -897,8 +976,7 @@ async def update_material(
     body: UpdateMaterialRequest,
     user_id: str,
 ) -> dict:
-    await _require_course_manager(db, course_id, user_id)
-    await _require_topic(db, course_id, topic_id)
+    await _require_topic_student_owner_or_editor(db, course_id, topic_id, user_id)
     material = await _require_material(db, topic_id, material_id)
 
     if body.title is not None:
@@ -934,8 +1012,7 @@ async def delete_material_for_course(
     material_id: str,
     user_id: str,
 ) -> None:
-    await _require_course_manager(db, course_id, user_id)
-    await _require_topic(db, course_id, topic_id)
+    await _require_topic_student_owner_or_editor(db, course_id, topic_id, user_id)
     await delete_material(db, topic_id, material_id)
 
 

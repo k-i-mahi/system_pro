@@ -46,9 +46,11 @@ class Settings(BaseSettings):
     RAG_CHUNK_SIZE: int = 800
     RAG_CHUNK_OVERLAP: int = 150
 
-    # RAG material indexing: false = background task in the API process (default; no ARQ ingest worker needed).
-    # true = enqueue to Redis (requires a running `arq app.workers.ingest_worker.WorkerSettings` process).
+    # RAG material indexing: false = in API process; true = Redis ARQ (requires a running arq worker).
     INGEST_USE_ARQ_QUEUE: bool = False
+    # If True, wait for indexing to finish before returning from upload/reingest (reliable for Ask Course).
+    # Ignored when INGEST_USE_ARQ_QUEUE is True (queue is async; run the ingest worker or set queue to False).
+    INGEST_AWAIT: bool = True
 
     LLM_LOG_SAMPLING_RATE: float = 1.0
 

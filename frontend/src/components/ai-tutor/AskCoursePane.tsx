@@ -136,11 +136,8 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
 
     const body: Record<string, unknown> = { question: q, courseId, stream: true };
     if (topicId) body.topicId = topicId;
-    if (
-      fileMaterials.length > 0 &&
-      selectedMaterialIds.length > 0 &&
-      selectedMaterialIds.length < fileMaterials.length
-    ) {
+    // Always send selected file IDs so RAG scope matches the sidebar (not only when subset-selected).
+    if (fileMaterials.length > 0 && selectedMaterialIds.length > 0) {
       body.materialIds = selectedMaterialIds;
     }
 
@@ -328,7 +325,16 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
                   <span className="min-w-0 flex-1 truncate text-text-primary" title={m.title}>
                     {m.title}
                   </span>
-                  <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium', badge.className)}>
+                  <span
+                    className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium', badge.className)}
+                    title={
+                      badge.label === 'Failed' && m.ingestError
+                        ? m.ingestError
+                        : badge.label === 'Failed'
+                          ? 'Indexing failed — use refresh to retry or check backend logs.'
+                          : undefined
+                    }
+                  >
                     {badge.label}
                   </span>
                   {canShowReingest &&

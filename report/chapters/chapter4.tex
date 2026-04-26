@@ -1,219 +1,160 @@
-\chapter{Implementation, Results and Discussions}
+
+\chapter{Evaluation, Results and Discussion}
 \label{ch:evaluation}
 
-\section{Introduction}
-This chapter describes the concrete implementation, the environment we used to run and verify the system, the metrics and procedures we relied on instead of hand-wavy claims, and the qualitative evidence (screenshots and flows) that show the objectives from Chapter~I in action. Testing and validation material that used to stand alone is folded in here so the narrative matches the CSE~3200 template: setup, evaluation, results, and explicit mapping back to objectives.
+\section{Implementation Summary}
+The project is a modular full-stack web app. The client is written in React and TypeScript.
+The backend is FastAPI-based with a service driven architecture and schema validation. PostgreSQL is used as the
+primary database and Redis-powered asynchronous task processing is used for background jobs.
 
-\section{Experimental Setup}
-The project is implemented as a modular full-stack web application. The frontend is developed with React and TypeScript using Vite as the build tool. The backend uses FastAPI with a service-oriented structure and schema-based validation. PostgreSQL is the primary persistence layer, and Redis-backed asynchronous processing supports background operations and caching where configured.
-
-Local runs use Docker Compose so that database, cache, API, workers, and optional AI services start with consistent ports and environment variables. This setup is what we used while capturing screenshots and running automated tests for the report.
-
-\begin{table}[htbp]
-\centering
-\caption{Technology stack used in implementation.}
-\label{tab:tech-stack}
-\begin{tabular}{p{1.75in}p{3.85in}}
-\toprule
-\textbf{Layer} & \textbf{Technology} \\
-\midrule
-Frontend        & React, TypeScript, Vite, TanStack Query, Zustand \\
-Backend         & Python, FastAPI, Pydantic, JWT-based authentication \\
-Database        & PostgreSQL, SQLAlchemy async \\
-Queue / Async   & Redis with worker-based asynchronous tasks \\
-AI Integration  & Local model integration and retrieval-assisted tutor flows \\
-Deployment      & Docker Compose based local deployment \\
-\bottomrule
-\end{tabular}
+\begin{table}[H]
+	\centering
+	\caption{Technology stack used in implementation}
+	\begin{tabular}{p{2.0in}p{4.0in}}
+		\toprule
+		\textbf{Layer} & \textbf{Technology} \\
+		\midruleView & React, TypeScript, Vite, TanStack Query, Zustand \\Backend & Python, FastAPI, Pydantic, JWT authenticationDatabase & PostgreSQL, SQLAlchemy async
+		Frontend        & React, TypeScript, Vite, TanStack Query, Zustand \\
+		Backend         & Python, FastAPI, Pydantic, JWT-based authentication \\
+		Database        & PostgreSQL, SQLAlchemy async \\
+		Queue / Async & Redis asynchronous tasks with workers\\
+		AI Integration & Integration of local model and retrieval-augmented tutor flows \\Deployment & Local deployment with Docker Compose \\\
+		Deployment      & Docker Compose based local deployment \\
+		\bottomrule
+	\end{tabular}
 \end{table}
 
-\section{Evaluation Metrics}
-Rather than reporting unsupported benchmark scores for the language model, we evaluated the engineering outcome with criteria that match the objectives in Chapter~I:
-\begin{itemize}
-\item \textbf{Correctness and safety of APIs:} route-level tests where available, plus manual checks for authorization on sensitive mutations.
-\item \textbf{Coverage of core flows:} each bullet workflow in the list below can be exercised from the UI against a running stack.
-\item \textbf{Build reproducibility:} backend test suite passes and frontend production build completes without errors on the reference environment.
-\item \textbf{Interaction quality:} loading, empty, and error states behave sensibly on main pages; mutations show success or failure feedback.
-\end{itemize}
+\section{Module-Wise Implementation}
 
-\section{Dataset}
-There is no single public ``course dataset'' bundled as a research corpus. Instead, the system is validated against \textbf{representative seeded or manually entered course data}: users, enrollments, topics, uploaded or pasted materials, routine slots, classroom threads, and notifications created during development. This is appropriate for a systems project: the scientific object is the platform behavior, not a fixed offline dataset. Where retrieval is enabled, chunks are derived from whatever materials tutors attach to topics in that environment.
-
-\section{Implementation and Results}
-
-\subsection{Module-wise implementation}
-Figure~\ref{fig:module-connectivity} summarizes how the implemented modules depend on one another at a high level. The narrative below follows the same order we used when walking a reviewer through the application.
-
-\begin{figure}[htbp]
-\centering
-\resizebox{0.98\textwidth}{!}{%
-\begin{tikzpicture}[
-    node distance=7mm and 8mm,
-    m/.style={draw, rounded corners, align=center, minimum width=2.6cm, minimum height=8mm, fill=kuetgray},
-    arr/.style={-{Stealth}, thick}
-]
-\node[m, fill=blue!10] (auth) {Auth + Profile};
-\node[m, right=of auth, fill=blue!10] (courses) {Courses + Topics};
-\node[m, right=of courses, fill=blue!10] (routine) {Routine + Attendance};
-\node[m, below=of auth, fill=green!10] (tutor) {AI Tutor};
-\node[m, below=of courses, fill=green!10] (community) {Community};
-\node[m, below=of routine, fill=green!10] (notif) {Notifications};
-\node[m, below=of community, fill=orange!12] (analytics) {Analytics};
-
-\draw[arr] (auth) -- (courses);
-\draw[arr] (courses) -- (routine);
-\draw[arr] (courses) -- (tutor);
-\draw[arr] (community) -- (notif);
-\draw[arr] (routine) -- (analytics);
-\draw[arr] (tutor) -- (analytics);
-\draw[arr] (community) -- (analytics);
-\end{tikzpicture}%
-}
-\caption{Project-core module connectivity in implementation.}
-\label{fig:module-connectivity}
+\begin{figure}[H]
+	\centering
+	\begin{tikzpicture}[
+		node distance=7mm and 8mm,
+		m/.style={draw, rounded corners, align=center, minimum width=2.6cm, minimum height=8mm, fill=kuetgray},
+		arr/.style={-{Stealth}, thick}
+		]
+		\node[m, fill=blue!10] (auth) {Auth + Profile};
+		\node[m, right=of auth, fill=blue!10] (courses) {Courses + Topics};
+		\node[m, below=of courses, fill=blue!10] (routine) {Routine + Attendance};
+		\node[m, below=of auth, fill=green!10] (tutor) {AI Tutor};
+		\node[m, below=of courses, fill=green!10] (community) {Community};
+		\node[m, below=of routine, fill=green!10] (notif) {Notifications};
+		\node[m, below=of community, fill=orange!12] (analytics) {Analytics};
+		
+		\draw[arr] (auth) -- (courses);
+		\draw[arr] (courses) -- (routine);
+		\draw[arr] (courses) -- (tutor);
+		\draw[arr] (community) -- (notif);
+		\draw[arr] (routine) -- (analytics);
+		\draw[arr] (tutor) -- (analytics);
+		\draw[arr] (community) -- (analytics);
+	\end{tikzpicture}
+	\caption{Module connectivity in implementation.}
+	\label{fig:module-connectivity}
 \end{figure}
 
-\textbf{Authentication and profile.} Authentication uses token-based session flows. Protected endpoints rely on backend dependencies to enforce authorized access. Profile functionality includes user information updates, avatar handling, and account-level operations.
+\subsection{Authentication and Profile}
+Token-based authentication is used. Secured resources use backend dependencies to
+authorized access. Profile operations include: user details, avatar and account.
+operations.
 
-\textbf{Course and topic management.} Course management includes listing, detail views, enrollment-linked data, topic operations, and material actions. The backend and frontend are connected through dedicated route and service layers to keep CRUD behavior predictable.
+\subsection{Course and Topic Management}
+Course management includes list, detail, data based on enrollments, topic actions and material actions. The
+There are route and service layers connecting the front-end with the back-end for consistent CRUD operations.
 
-\textbf{AI Tutor workspace.} The AI Tutor is implemented as a multi-mode workspace: chat, explain, ask-with-course context, quiz, and resource-oriented flows. Mode switching, topic context, and state synchronization are coordinated in the frontend and corresponding API endpoints.
+\subsection{AI Tutor Workspace}
+The AI Tutor is implemented as a multi-mode workspace for user interactions via chat,
+quiz, and resources. Switching modes, maintaining topic and state in frontend
+components and endpoints.
 
-\textbf{Routine and attendance.} Routine includes schedule slot management and calendar-style visualization in the UI. Attendance-related data feeds analytics and classroom views.
+\subsection{Routine and Attendance}
+Routine management covers schedule slot management and routine visualisation in the frontend. Attendance
+data is included in analytics and class processes.
 
-\textbf{Community and classroom operations.} Community features include classrooms, threads, replies, announcements, and role-dependent views for attendance and marks where implemented.
+\subsection{Community and Classroom Operations}
+Community implementation provides classrooms, threads, replies, announcements, attendance views, marks views and member
+management interactions. Interaction pathways (tutor and student) are distinguished using role-based UI and checks.
 
-\textbf{Notifications.} Listing, unread counters, mark-read actions, and deep links into relevant pages are supported; the UI refreshes when new notifications arrive.
+\subsection{Notifications}
+The notifications module includes listing, unread counts, mark as read, and response actions for classes.
+Realtime updates are linked to frontend state management to provide realtime visual feedback.
 
-\textbf{Analytics.} Dashboard-style pages summarize activity for students and tutors, drawing on attendance and related entities as designed in the schema.
+\subsection{Analytics Dashboard}
+Analytics offers an overview and per-course view. It is connected with attendance and scoring entities,
+with two perspectives for student and tutors.
 
-\subsection{Quantitative results}
-Automated checks give a compact picture of engineering health. Exact counts may drift as tests are added; at the time of writing, the intended standard is that \textbf{backend pytest runs complete successfully}, \textbf{frontend tests (Vitest) complete successfully}, and \textbf{\texttt{npm run build}} produces a production bundle without errors. Table~\ref{tab:quant-summary} states the qualitative level we report here rather than a frozen number, to avoid stale metrics in a living repository.
-
-\begin{table}[htbp]
-\centering
-\caption{Quantitative validation summary (reporting level, not a frozen benchmark).}
-\label{tab:quant-summary}
-\begin{tabular}{p{2.0in}p{3.65in}}
-\toprule
-\textbf{Signal} & \textbf{What ``passing'' means for this project} \\
-\midrule
-Backend tests & Core routes, auth, and services covered by \texttt{pytest} exit code zero on CI or local run. \\
-Frontend tests & Selected page and component tests exit zero. \\
-Production build & Typecheck and Vite build succeed. \\
-\bottomrule
-\end{tabular}
+\section{API Implementation Snapshot}
+\begin{table}[H]
+	\centering
+	\caption{Some API Endpoints implemented}
+	\begin{tabular}{p{1.5in}p{2.5in}p{2.0in}}
+		\toprule
+		\textbf{Module} & \textbf{Endpoint} & \textbf{Purpose} \\
+		\midruleAuth & /api/auth/* & Account and authentication \\Courses & /api/courses/* & Course, topic and material management \\Routine & /api/routine/* & Routine and slot flows \\AI Tutor & /api/ai-tutor/* & Multimodal tutor flows \\
+		Auth          & /api/auth/*                     & Authentication and account flows \\
+		Courses       & /api/courses/*                  & Course, topic, and material operations \\
+		Routine       & /api/routine/*                  & Routine and slot-related operations \\
+		AI Tutor      & /api/ai-tutor/*                 & Multi-mode tutor interactions \\
+		Community & /api/community/* & Classroom, thread and announcement flows \\nouncement flows \\
+		Notifications & /api/notifications/* & Notification and response actions \\ actions \\
+		Analytics & /api/analytics/* & Overview and course analytics \\Profile & /api/profile/* & User profile and account \\Settings & /api/settings/* & User preferences and settings \\course analytics \\
+		Profile       & /api/profile/*                  & Profile and account management \\
+		Settings      & /api/settings/*                 & User preferences and settings \\
+		\bottomrule
+	\end{tabular}
 \end{table}
 
-\subsection{Qualitative results}
-The screenshots in Figures~\ref{fig:shot-landing}--\ref{fig:shot-notify} illustrate the main user-facing surfaces: landing and auth, routine planning, AI Tutor workspace, analytics, community, and notifications. Together they show that the modules named in Chapter~I are not paper features; they appear as navigable pages backed by the API surface summarized in Table~\ref{tab:api-snapshot}.
+\section{User Interface}
+The user interface (UI) is based on dedicated pages for each project core module. The screenshots below are the major
+user interfaces implemented in the system.
 
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=0.95\textwidth]{assets/screenshots/landing.png}
-\caption{Landing page.}
-\label{fig:shot-landing}
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\textwidth]{assets/screenshots/landing.png}
+	\caption{Landing Page}
 \end{figure}
 
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=0.95\textwidth]{assets/screenshots/login.png}
-\caption{Login interface.}
-\label{fig:shot-login}
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\textwidth]{assets/screenshots/login.png}
+	\caption{Login Interface}
 \end{figure}
 
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=0.95\textwidth]{assets/screenshots/routine.png}
-\caption{Routine page and slot visualization.}
-\label{fig:shot-routine}
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\textwidth]{assets/screenshots/routine.png}
+	\caption{View of Routine Page and Slot}
 \end{figure}
 
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=0.95\textwidth]{assets/screenshots/ai_tutor.png}
-\caption{AI Tutor workspace.}
-\label{fig:shot-tutor}
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\textwidth]{assets/screenshots/ai_tutor.png}
+	\caption{AI Tutor Workspace}
 \end{figure}
 
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=0.95\textwidth]{assets/screenshots/analytics.png}
-\caption{Analytics dashboard.}
-\label{fig:shot-analytics}
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\textwidth]{assets/screenshots/analytics.png}
+	\caption{Analytics Dashboard}
 \end{figure}
 
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=0.95\textwidth]{assets/screenshots/community.png}
-\caption{Community and classroom flow.}
-\label{fig:shot-community}
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\textwidth]{assets/screenshots/community.png}
+	\caption{Community and Classroom Flow}
 \end{figure}
 
-\begin{figure}[htbp]
-\centering
-\includegraphics[width=0.95\textwidth]{assets/screenshots/notifications.png}
-\caption{Notification center with deep links.}
-\label{fig:shot-notify}
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.95\textwidth]{assets/screenshots/notifications.png}
+	\caption{Notification Center with Deep-links}
 \end{figure}
 
-\begin{table}[htbp]
-\centering
-\caption{Selected implemented API endpoints (illustrative snapshot).}
-\label{tab:api-snapshot}
-\begin{tabular}{p{1.15in}p{2.35in}p{1.95in}}
-\toprule
-\textbf{Module} & \textbf{Endpoint} & \textbf{Purpose} \\
-\midrule
-Auth          & /api/auth/*                     & Authentication and account flows \\
-Courses       & /api/courses/*                  & Course, topic, and material operations \\
-Routine       & /api/routine/*                  & Routine and slot-related operations \\
-AI Tutor      & /api/ai-tutor/*                 & Multi-mode tutor interactions \\
-Community     & /api/community/*                & Classroom, thread, and announcement flows \\
-Notifications & /api/notifications/*            & Notification and response actions \\
-Analytics     & /api/analytics/*                & Overview and course analytics \\
-Profile       & /api/profile/*                  & Profile and account management \\
-Settings      & /api/settings/*                 & User preferences and settings \\
-\bottomrule
-\end{tabular}
-\end{table}
+\section{Discussion}
+This project shows that a system can integrate wide-ranging academic processes with AI-driven learning.
+maintainable system. The key engineering success is consistency: the user works with linked modules
+rather than separate apps, and the code is well-organised into route-service-data.
 
-\subsection{Analysis of the results}
-The implementation shows that a student team can deliver a \textbf{broad but coherent} LMS plus AI surface in one codebase when scope is controlled and integration is treated as a first-class requirement. The limiting factor is not drawing diagrams, but keeping authorization and validation aligned everywhere; that is why our evaluation narrative emphasizes tests and runnable deployment over model accuracy numbers we cannot fairly claim.
-
-\textbf{Core flows exercised during validation.} The following project-core flows were checked repeatedly while preparing the demonstration:
-\begin{enumerate}[label=\arabic*.]
-	\item Secure access (login, protected routes).
-	\item Course, topic, and material interactions.
-	\item Routine and attendance interactions.
-	\item AI Tutor modes with topic context.
-	\item Community classroom, thread, and announcement flows.
-	\item Notification list, unread state, and actions.
-	\item Analytics page load for student and tutor perspectives.
-	\item Settings and profile updates.
-\end{enumerate}
-
-\textbf{CRUD and permission mindset.} For each core entity we paid attention to create and update validation, consistent list and detail responses, delete behavior where exposed, and role boundaries on sensitive operations.
-
-\section{Objectives Achieved}
-Table~\ref{tab:objectives-map} links the objectives from Chapter~I to evidence in this chapter and in Chapter~III.
-
-\begin{table}[htbp]
-\centering
-\caption{Mapping of project objectives to outcomes.}
-\label{tab:objectives-map}
-\begin{tabular}{@{}p{0.38in}p{2.35in}p{2.75in}@{}}
-\toprule
-\textbf{\#} & \textbf{Objective (short)} & \textbf{How it was achieved} \\
-\midrule
-1 & Role-aware LMS modules & Pages and APIs for auth, courses, routine, community, notifications, analytics, settings, profile; role-aware UI. \\
-2 & AI Tutor with context & Workspace modes; context from course and topic entities; retrieval over materials where configured. \\
-3 & Material workflows & Upload and ingestion with async workers for heavier steps. \\
-4 & Reliable CRUD & Pydantic validation, service rules, tests on critical routes. \\
-5 & Deployable stack & Docker Compose and documented environment for local full-stack runs. \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\section{Conclusion}
-Taken together, the setup, metrics, screenshots, and objective mapping show a \textbf{working integrated system} rather than a disconnected set of demos. The most important lesson for us as developers is that AI features only feel trustworthy when ordinary LMS operations remain correct and fast. That balance---exciting tutor capabilities on top of boring, solid CRUD---is the result we want to highlight.
+The project also illustrates the trade-offs. AI features enhance user experience and research, but they need to be
+need to be complemented by sound CRUD and authorization. As a consequence, the implementation and testing concentrate on
+correct interactions, API contracts and module integration instead of untested benchmark claims.

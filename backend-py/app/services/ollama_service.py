@@ -104,7 +104,7 @@ async def chat_completion(
 
     try:
         if on_chunk:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
                 async with client.stream("POST", f"{settings.OLLAMA_BASE_URL}/api/chat", json=body) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
@@ -122,7 +122,7 @@ async def chat_completion(
                         except json.JSONDecodeError:
                             pass
         else:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
                 r = await client.post(f"{settings.OLLAMA_BASE_URL}/api/chat", json=body)
                 r.raise_for_status()
                 data = r.json()
@@ -176,25 +176,62 @@ async def chat_completion_structured(
         raise ValueError(f"Structured output is not valid JSON: {trimmed[:200]}")
 
 
-async def embed(input: str | list[str], user_id: str | None = None) -> list[list[float]]:
-    texts = [input] if isinstance(input, str) else input
+def fit_embedding_to_db_dim(vec: list[float], target_dim: int | None = None) -> list[float]:
+    """Pad/truncate to match pgvector column (Ollama model output may differ from DB width)."""
+    if target_dim is None:
+        target_dim = settings.OLLAMA_EMBEDDING_DIM
+    if target_dim <= 0 or not vec:
+        return vec
+    n = len(vec)
+    if n == target_dim:
+        return vec
+    if n > target_dim:
+        if n - target_dim > 8:
+            logger.warning("Truncating query/document embedding from %d to %d dimensions", n, target_dim)
+        return vec[:target_dim]
+    return vec + [0.0] * (target_dim - n)
+
+
+def _parse_ollama_embed_response(data: dict) -> list[list[float]]:
+    """Normalize /api/embed JSON across Ollama versions."""
+    raw = data.get("embeddings")
+    if raw is not None and isinstance(raw, list) and len(raw) > 0:
+        return raw
+    one = data.get("embedding")
+    if one is not None and isinstance(one, list) and len(one) > 0:
+        if isinstance(one[0], (int, float)):
+            return [list(one)]
+        if isinstance(one[0], list):
+            return list(one)
+    raise ValueError(f"Ollama /api/embed returned no vectors (keys={list(data.keys())})")
+
+
+_EMBED_BATCH_SIZE = 24
+
+
+async def _embed_batch(texts: list[str], user_id: str | None) -> list[list[float]]:
+    """Single /api/embed call; kept small so Ollama does not time out on long documents."""
     if not texts:
         return []
-
     t0 = time.monotonic()
     status = LlmCallStatus.OK
     error_msg: str | None = None
     embeddings: list[list[float]] = []
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0)) as client:
             r = await client.post(
                 f"{settings.OLLAMA_BASE_URL}/api/embed",
                 json={"model": settings.OLLAMA_EMBEDDING_MODEL, "input": texts},
             )
             r.raise_for_status()
-            data = r.json()
-            embeddings = data.get("embeddings", [])
+            embeddings = _parse_ollama_embed_response(r.json())
+        if len(embeddings) != len(texts):
+            raise ValueError(
+                f"Ollama embed count mismatch: got {len(embeddings)} vectors for {len(texts)} inputs"
+            )
+        dim = settings.OLLAMA_EMBEDDING_DIM
+        embeddings = [fit_embedding_to_db_dim(v, dim) for v in embeddings]
     except Exception as exc:
         status = LlmCallStatus.ERROR
         error_msg = str(exc)
@@ -216,6 +253,17 @@ async def embed(input: str | list[str], user_id: str | None = None) -> list[list
         ))
 
     return embeddings
+
+
+async def embed(input: str | list[str], user_id: str | None = None) -> list[list[float]]:
+    texts = [input] if isinstance(input, str) else input
+    if not texts:
+        return []
+    out: list[list[float]] = []
+    for i in range(0, len(texts), _EMBED_BATCH_SIZE):
+        batch = texts[i : i + _EMBED_BATCH_SIZE]
+        out.extend(await _embed_batch(batch, user_id))
+    return out
 
 
 async def chat_completion_stream(
@@ -240,7 +288,7 @@ async def chat_completion_stream(
     error_msg: str | None = None
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
             async with client.stream("POST", f"{settings.OLLAMA_BASE_URL}/api/chat", json=body) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():

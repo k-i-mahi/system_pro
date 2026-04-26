@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ExternalLink, FileText, X } from 'lucide-react';
+import { fetchWithApiAuth } from '@/lib/api';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
 import type { Citation } from './CitationChip';
@@ -39,14 +40,14 @@ export function MaterialPreviewPane({ citation, onClose, className }: Props) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`${API_BASE}/materials/${citation.materialId}`, {
+    fetchWithApiAuth(`${API_BASE}/materials/${citation.materialId}`, {
       headers: { Accept: 'application/json' },
       credentials: 'include',
     })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const body = await r.json();
-        if (!cancelled) setMaterial(body.data ?? body);
+        const raw = (await r.json()) as { data?: MaterialMeta };
+        if (!cancelled) setMaterial(raw.data ?? null);
       })
       .catch((e) => {
         if (!cancelled) setError((e as Error).message);

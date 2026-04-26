@@ -77,8 +77,8 @@ async def create_topic(
 @router.put("/{course_id}/topics/{topic_id}")
 async def update_topic(
     course_id: str, topic_id: str, body: UpdateTopicRequest, db: DBDep, user_id: CurrentUserIdDep,
-    _role: str = require_role(Role.TUTOR, Role.ADMIN),
 ) -> JSONResponse:
+    # RBAC: tutors/admins (any topic) or enrolled students (own personal topics only) — see service
     topic = await courses_service.update_topic(db, course_id, topic_id, body, user_id)
     return resp.success(topic)
 
@@ -86,7 +86,6 @@ async def update_topic(
 @router.delete("/{course_id}/topics/{topic_id}")
 async def delete_topic(
     course_id: str, topic_id: str, db: DBDep, user_id: CurrentUserIdDep,
-    _role: str = require_role(Role.TUTOR, Role.ADMIN),
 ) -> JSONResponse:
     await courses_service.delete_topic_for_course(db, course_id, topic_id, user_id)
     return resp.success({"message": "Topic deleted"})
@@ -106,8 +105,8 @@ async def upload_material(
     title: str | None = Form(default=None),
     fileType: str | None = Form(default=None),
     quality: str | None = Form(default=None),
-    _role: str = require_role(Role.TUTOR, Role.ADMIN),
 ) -> JSONResponse:
+    # RBAC: tutors/admins or enrolled students on their own personal topics — see service
     file_ext = Path(file.filename or "").suffix.lower()
     content_type_ok = file.content_type in _ACCEPTED_MATERIAL_CONTENT_TYPES
     extension_ok = file_ext in _ACCEPTED_MATERIAL_EXTENSIONS
@@ -131,7 +130,6 @@ async def upload_material(
 @router.post("/{course_id}/topics/{topic_id}/materials/link")
 async def add_material_link(
     course_id: str, topic_id: str, body: AddMaterialLinkRequest, db: DBDep, user_id: CurrentUserIdDep,
-    _role: str = require_role(Role.TUTOR, Role.ADMIN),
 ) -> JSONResponse:
     material = await courses_service.add_material_link(db, course_id, topic_id, body, user_id)
     return resp.created(material)
@@ -140,7 +138,6 @@ async def add_material_link(
 @router.delete("/{course_id}/topics/{topic_id}/materials/{material_id}")
 async def delete_material(
     course_id: str, topic_id: str, material_id: str, db: DBDep, user_id: CurrentUserIdDep,
-    _role: str = require_role(Role.TUTOR, Role.ADMIN),
 ) -> JSONResponse:
     await courses_service.delete_material_for_course(db, course_id, topic_id, material_id, user_id)
     return resp.success({"message": "Material deleted"})
@@ -154,7 +151,6 @@ async def update_material(
     body: UpdateMaterialRequest,
     db: DBDep,
     user_id: CurrentUserIdDep,
-    _role: str = require_role(Role.TUTOR, Role.ADMIN),
 ) -> JSONResponse:
     material = await courses_service.update_material(db, course_id, topic_id, material_id, body, user_id)
     return resp.success(material)

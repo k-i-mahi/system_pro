@@ -1,62 +1,41 @@
-\chapter{Applications of the Work, Organization of the Project, and Related Works}
+\chapter{Related Works}
 
-\section{Applications of the Work}
-Cognitive Copilot is intended for \textbf{department-level academic use}: students can follow courses and topics, track routine and attendance, join classroom threads, receive notifications, and use the AI Tutor with material that belongs to the course. Tutors can manage class communication, review engagement through analytics, and guide students without sending them to a separate ``magic chat'' that lacks context.
+\section{Learning Management Platforms}
+Traditional LMS services are centered around managing courses, assignment management, and grading. Their operational strength is strong.
+but AI-assisted learning is external or less connected. This forms a general disjunction: students are able to.
+access information, yet contextual tutoring is not combined with the same course data.
 
-The same design could be extended later toward stronger institutional deployment (identity federation, policy engines, richer grading exports). For this project, the emphasis is on a coherent demonstration system that behaves predictably for the stakeholders we modeled: students, tutors, and limited administrative control.
+\section{AI-Assisted Learning Systems}
+Recent AI tutoring systems demonstrate the importance of interactive question answering, guided explanation, and adaptive practice.
+Nonetheless, most of the implementations rely on generic chat interactions with little grounding in course. In educational settings,
+examples are more effective when associated with real class content and subject matter.
 
-\section{Organization of the Project}
-The repository is organized in a \textbf{monorepo-style} layout with a clear split between user interface, API, and infrastructure:
+|human|>section Retrieval-Augmented Generation in Education.
+Retrieval-Augmented Generation (RAG) is a combination of language generation with information retrieval. This is in course contexts.
+helpful since answers can be linked to existing resources, rather than model memory alone. Current research
+promotes hybrid retrieval strategies integrating lexical and vector cues \cite{lewis2020rag,gao2023ragsurvey).
+	
+	In this project, the corresponding notion is not an originality in designing algorithms, but a practical application of retrieval to.
+	Answers to course context in LMS.
+	
+	OCR in Academic Processes.
+	Digitization of documents has been a long term use of OCR. Old-fashioned OCR engines are effective in clean printed text, whereas.
+	OCR with methods based on transformers is under investigation in more complicated cases. OCR can be of use in the educational processes.
+	to extract text on uploaded content or timetable image to allow content to be indexed and re-used.
+section Agentic and Multi-Mode Tutor Interfaces.
+In many instances, a modern tutor interface will be a combination of more than one interaction pattern: free chat, explain mode, question answering, quiz.
+resource recommendations, practice and. The associated body of literature on tool-using agents and structured prompting.
+This direction is informed by cite: react-yao2023 and toolformer-schick2023. In this case, the focus of this report is on implemented.
+instead of hypothetical agent performance assertions.
+
+section. Location of this Project.
+According to the context above, Cognitive Copilot is a positioned implementation-based academic system that:
 \begin{itemize}
-\item \texttt{frontend/} --- React application, pages per module (courses, community, AI Tutor, analytics, and so on), shared libraries for API access and onboarding.
-\item \texttt{backend-py/} --- FastAPI application structured into routers, services, schemas, and workers; PostgreSQL models and migrations live alongside the API code.
-\item \texttt{docker-compose.yml} and related configuration --- bring up database, cache, API, workers, and optional AI runtime for end-to-end runs.
-\item \texttt{report/} --- \LaTeX{} sources, figures, screenshots, and bibliography for this document.
+	item combines LMS modules and AI tutor processes into a single platform,
+	item connects AI interactions to course/topic context,
+	item assists with real-world classroom activities (community, notifications, routine, analytics),
+	item and emphasizes correctness and maintainability of software.
 \end{itemize}
 
-This layout matches how we worked day to day: feature slices usually touched one router and its service on the backend, plus one or two pages on the frontend, with Docker used to validate integration.
-
-\section{Related Works}
-
-\subsection{Learning Management Platforms}
-Conventional LMS platforms focus on course administration, assignment flow, and grading. Their strength is operational stability, but AI-assisted learning is often external or loosely connected. That creates a common gap: students can access information, but contextual tutoring is not integrated with the same course data.
-
-\subsection{AI-Assisted Learning Systems}
-Recent AI tutoring systems show the value of interactive question answering, guided explanation, and adaptive practice. However, many implementations rely on general chat with limited course grounding. In educational settings, answers are stronger when they are tied to real class materials and topic structure.
-
-\subsection{Retrieval-Augmented Generation in Education}
-Retrieval-Augmented Generation (RAG) combines information retrieval with language generation. In course settings, that helps because answers can be tied to available materials instead of relying only on model memory. Current research supports hybrid retrieval that blends lexical and vector signals \cite{lewis2020rag,gao2023ragsurvey}. In our project, RAG is used pragmatically to ground tutor answers in uploaded materials rather than to propose a new retrieval algorithm.
-
-\subsection{OCR for Academic Workflows}
-OCR has long been used for document digitization. Traditional OCR engines perform well on clean printed text, while transformer-based OCR is explored for harder cases. In educational workflows, OCR is mainly useful for extracting text from uploaded materials or timetable images so content can be indexed and reused.
-
-\subsection{Agentic and Multi-Mode Tutor Interfaces}
-A modern tutor interface often combines several patterns: free chat, explain mode, question answering, quiz practice, and resource recommendations. The literature on tool-using agents and structured prompting \cite{yao2023react,schick2023toolformer} informs this direction. For this report, the focus stays on implemented user-facing modes rather than speculative agent performance claims.
-
-\section{Discussion}
-Table~\ref{tab:novelty-positioning} summarizes how we argue the \textbf{novelty} of this work for CSE~3200: not by denying prior art in LMS or AI, but by being explicit about what we integrated and verified ourselves.
-
-\begin{table}[htbp]
-\centering
-\caption{Positioning of Cognitive Copilot relative to common alternatives.}
-\label{tab:novelty-positioning}
-\begin{tabular}{p{1.72in}p{3.82in}}
-\toprule
-\textbf{Typical alternative} & \textbf{What our project does instead} \\
-\midrule
-Generic chatbot & Tutor modes bound to course and topic context; retrieval over course materials where configured. \\
-Standalone LMS without AI & One product vision: the AI Tutor lives inside the same navigation and permission model. \\
-Prototype-only demos & Emphasis on CRUD, validation, authorization, tests, and reproducible local deployment. \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Based on the related context above, Cognitive Copilot is positioned as an \textbf{implementation-oriented} academic system that:
-\begin{itemize}
-\item integrates LMS modules and AI tutor workflows in one platform,
-\item keeps AI interactions linked with course and topic context,
-\item supports practical classroom operations (community, notifications, routine, analytics),
-\item and prioritizes software correctness and maintainability.
-\end{itemize}
-
-The project contribution is therefore engineering integration and reliable module interoperability, rather than claiming a new AI algorithm.
+Engineering integration and interoperability of modules is the project contribution but not a claim of a.
+new AI algorithm.

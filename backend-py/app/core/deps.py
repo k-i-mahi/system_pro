@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Annotated
 
 import jwt
 import redis.asyncio as aioredis
+import redis.exceptions as redis_exc
 from fastapi import Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.exceptions import ForbiddenError, UnauthorizedError
+from app.core.exceptions import ForbiddenError, ServiceUnavailableError, UnauthorizedError
 from app.core.security import decode_token
 from app.db.session import AsyncSessionLocal
 from app.models.enums import Role
+
+logger = logging.getLogger(__name__)
+_redis_auth_warned = False
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
@@ -32,6 +37,31 @@ async def get_redis() -> aioredis.Redis:
 
 RedisDep = Annotated[aioredis.Redis, Depends(get_redis)]
 
+
+async def _redis_get_for_auth(redis: aioredis.Redis, key: str) -> str | None:
+    """
+    Token blacklist and auth-version reads. In production Redis must be up.
+    In non-production, fail open so local dev works without Redis (log once).
+    """
+    global _redis_auth_warned
+    try:
+        return await redis.get(key)
+    except (redis_exc.ConnectionError, redis_exc.TimeoutError, OSError) as exc:
+        if settings.NODE_ENV == "production":
+            logger.exception("Redis required for auth checks: %s", exc)
+            raise ServiceUnavailableError(
+                "Authentication dependency unavailable. Ensure Redis is running."
+            ) from exc
+        if not _redis_auth_warned:
+            _redis_auth_warned = True
+            logger.warning(
+                "Redis unreachable (%s); skipping token blacklist/auth-version checks. "
+                "Start Redis (port 6379) for revocation and multi-device security.",
+                exc,
+            )
+        return None
+
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 async def get_current_user_id(
@@ -43,7 +73,7 @@ async def get_current_user_id(
 
     token = authorization[7:]
 
-    blacklisted = await redis.get(f"bl:{token}")
+    blacklisted = await _redis_get_for_auth(redis, f"bl:{token}")
     if blacklisted:
         raise UnauthorizedError("Token revoked")
 
@@ -57,7 +87,7 @@ async def get_current_user_id(
 
     user_id = payload["userId"]
     token_auth_version = int(payload.get("authVersion", 0))
-    current_auth_version = await redis.get(f"authv:{user_id}")
+    current_auth_version = await _redis_get_for_auth(redis, f"authv:{user_id}")
 
     if current_auth_version is not None and token_auth_version != int(current_auth_version):
         raise UnauthorizedError("Token revoked")

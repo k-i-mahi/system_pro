@@ -1,6 +1,6 @@
 import { Fragment, useState, useCallback, type ChangeEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
   Bot,
@@ -69,6 +69,8 @@ type CourseDetail = {
   topics?: TopicItem[];
   canManage?: boolean;
   isTeaching?: boolean;
+  /** From API; used when enrollment object is missing but the viewer is still the enrolled student. */
+  viewerRole?: string;
   communityId?: string | null;
   communityName?: string | null;
   todayAttendance?: TodayAttendance | null;
@@ -211,8 +213,7 @@ export default function CourseDetailPage() {
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
   const [materialDraft, setMaterialDraft] = useState<MaterialDraft>({ title: '', fileUrl: '' });
   const [uploadingTopicId, setUploadingTopicId] = useState<string | null>(null);
-  const [uploadSuccessTopicId, setUploadSuccessTopicId] = useState<string | null>(null);
-  const [fileFormatWarning, setFileFormatWarning] = useState<string | null>(null);
+  const [fileFormatWarning, setFileFormatWarning] = useState<{ topicId: string; message: string } | null>(null);
 
   // Student study-log state
   const [showStudyLogForm, setShowStudyLogForm] = useState(false);
@@ -227,13 +228,24 @@ export default function CourseDetailPage() {
     queryKey: ['course', courseId],
     queryFn: () => api.get(`/courses/${courseId}`).then((response) => response.data.data as CourseDetail),
     enabled: !!courseId,
+    placeholderData: keepPreviousData,
     retry: (failCount, err: unknown) => {
       const status = (err as { response?: { status?: number } })?.response?.status;
       if (status === 404) return false;
       return failCount < 2;
     },
   });
-  const canManage = canManageByRole && Boolean(course?.canManage);
+  const viewerId = user?.id;
+  const canManageCourse = canManageByRole && Boolean(course?.canManage);
+  const isEnrolledStudent =
+    user?.role === 'STUDENT' && (Boolean(course?.enrollment) || course?.viewerRole === 'STUDENT');
+  const canAddTopicInHeader = canManageCourse || isEnrolledStudent;
+
+  function canModifyTopic(topic: TopicItem): boolean {
+    if (canManageCourse) return true;
+    if (isEnrolledStudent && topic.isPersonal && topic.createdBy === viewerId) return true;
+    return false;
+  }
 
   function invalidateCourseViews(includeNotifications = false) {
     const tasks: Promise<void>[] = [
@@ -354,16 +366,22 @@ export default function CourseDetailPage() {
     },
     onMutate: ({ topicId }) => {
       setUploadingTopicId(topicId);
-      setUploadSuccessTopicId(null);
+      setFileFormatWarning((w) => (w?.topicId === topicId ? null : w));
     },
     onSuccess: (_, { topicId }) => {
       invalidateCourseViews(true);
       ensureExpanded(topicId);
-      setUploadSuccessTopicId(topicId);
-      setTimeout(() => setUploadSuccessTopicId(null), 4000);
+      toast.success('Material uploaded', {
+        icon: <CheckCircle2 className="text-green-600" size={20} />,
+        duration: 4000,
+      });
     },
-    onError: (err: any) => {
-      toast.error(extractErrorMessage(err, `Supported formats: ${SUPPORTED_MATERIAL_LABEL}.`));
+    onError: (err: any, { topicId }) => {
+      const msg = extractErrorMessage(err, `Supported formats: ${SUPPORTED_MATERIAL_LABEL}.`);
+      setFileFormatWarning({ topicId, message: msg });
+      setTimeout(() => {
+        setFileFormatWarning((w) => (w?.topicId === topicId ? null : w));
+      }, 8000);
     },
     onSettled: () => {
       setUploadingTopicId(null);
@@ -409,7 +427,11 @@ export default function CourseDetailPage() {
       return;
     }
 
-    addTopicMutation.mutate(buildCreateTopicPayload(newTopic));
+    const payload = buildCreateTopicPayload(newTopic);
+    if (user?.role === 'STUDENT') {
+      payload.status = 'IN_PROGRESS';
+    }
+    addTopicMutation.mutate(payload);
   }
 
   function handleUpdateTopic() {
@@ -455,13 +477,18 @@ export default function CourseDetailPage() {
 
     if (!file) return;
     if (!isSupportedMaterialFile(file)) {
-      const ext = file.name.includes('.') ? file.name.split('.').pop()?.toUpperCase() : 'this format';
-      setFileFormatWarning(`.${ext?.toLowerCase() ?? 'unknown'} files are not supported. Accepted: ${SUPPORTED_MATERIAL_LABEL}`);
-      setTimeout(() => setFileFormatWarning(null), 6000);
+      const ext = file.name.includes('.') ? file.name.split('.').pop()?.toUpperCase() : 'UNKNOWN';
+      setFileFormatWarning({
+        topicId,
+        message: `.${String(ext).toLowerCase()} is not supported. Please upload: ${SUPPORTED_MATERIAL_LABEL}.`,
+      });
+      setTimeout(() => {
+        setFileFormatWarning((w) => (w?.topicId === topicId ? null : w));
+      }, 8000);
       return;
     }
 
-    setFileFormatWarning(null);
+    setFileFormatWarning((w) => (w?.topicId === topicId ? null : w));
     uploadMaterialMutation.mutate({ topicId, file });
   }
 
@@ -592,9 +619,17 @@ export default function CourseDetailPage() {
         </div>
       )}
 
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Course Schedule & Topics ({course.topics?.length || 0})</h2>
-        {canManage && (
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="text-lg font-semibold">Course Schedule & Topics ({course.topics?.length || 0})</h2>
+          {isEnrolledStudent && !canManageCourse && (
+            <p className="mt-1 max-w-2xl text-xs text-text-muted">
+              The class schedule shows shared materials from your instructor’s classroom. Your own files go only on
+              topics you add here (private to you) — not the same as routine scans elsewhere.
+            </p>
+          )}
+        </div>
+        {canAddTopicInHeader && (
           <button
             onClick={() => setShowAddTopic((previous) => !previous)}
             className="btn-primary flex items-center gap-2 text-sm"
@@ -605,7 +640,7 @@ export default function CourseDetailPage() {
         )}
       </div>
 
-      {canManage && showAddTopic && (
+      {canAddTopicInHeader && showAddTopic && (
         <div className="card mb-4">
           <h3 className="mb-3 text-sm font-semibold">New Topic</h3>
           <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -684,7 +719,11 @@ export default function CourseDetailPage() {
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-text-muted">
                     <BookOpen size={32} className="mx-auto mb-2" />
-                    <p>No topics yet. Add your first topic to get started.</p>
+                    <p>
+                      {canAddTopicInHeader
+                        ? 'No topics yet. Add your first topic to get started.'
+                        : 'No topics in this course yet.'}
+                    </p>
                   </td>
                 </tr>
               ) : (
@@ -695,23 +734,44 @@ export default function CourseDetailPage() {
 
                   return (
                     <Fragment key={topic.id}>
-                      <tr
-                        className="cursor-pointer border-b border-border transition-colors hover:bg-bg-main/50"
-                        onClick={() => toggleTopicExpansion(topic.id)}
-                      >
-                        <td className="px-4 py-3 text-text-muted">{index + 1}</td>
-                        <td className="px-4 py-3">{topic.weekNumber ? `W${topic.weekNumber}` : '-'}</td>
-                        <td className="px-4 py-3 text-text-secondary">{formatTopicDate(topic.sessionDate)}</td>
-                        <td className="px-4 py-3 font-medium">
+                      <tr className="border-b border-border transition-colors hover:bg-bg-main/50">
+                        <td
+                          className="cursor-pointer px-4 py-3 text-text-muted"
+                          onClick={() => toggleTopicExpansion(topic.id)}
+                        >
+                          {index + 1}
+                        </td>
+                        <td
+                          className="cursor-pointer px-4 py-3"
+                          onClick={() => toggleTopicExpansion(topic.id)}
+                        >
+                          {topic.weekNumber ? `W${topic.weekNumber}` : '-'}
+                        </td>
+                        <td
+                          className="cursor-pointer px-4 py-3 text-text-secondary"
+                          onClick={() => toggleTopicExpansion(topic.id)}
+                        >
+                          {formatTopicDate(topic.sessionDate)}
+                        </td>
+                        <td
+                          className="cursor-pointer px-4 py-3 font-medium"
+                          onClick={() => toggleTopicExpansion(topic.id)}
+                        >
                           <div className="flex items-center gap-2">
                             {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                             <span>{topic.title}</span>
                           </div>
                         </td>
-                        <td className="max-w-md px-4 py-3 text-text-secondary">
+                        <td
+                          className="max-w-md cursor-pointer px-4 py-3 text-text-secondary"
+                          onClick={() => toggleTopicExpansion(topic.id)}
+                        >
                           <span className="line-clamp-2">{topic.description || '-'}</span>
                         </td>
-                        <td className="px-4 py-3 text-center">
+                        <td
+                          className="cursor-pointer px-4 py-3 text-center"
+                          onClick={() => toggleTopicExpansion(topic.id)}
+                        >
                           <span className="inline-flex min-w-8 items-center justify-center rounded-full bg-bg-main px-2 py-1 text-xs font-medium text-text-secondary">
                             {topicMaterials.length}
                           </span>
@@ -725,7 +785,7 @@ export default function CourseDetailPage() {
                             >
                               <Bot size={14} />
                             </Link>
-                            {canManage && (
+                            {canModifyTopic(topic) && (
                               <button
                                 onClick={() => openTopicEditor(topic)}
                                 className="rounded p-1.5 text-primary hover:bg-primary-light"
@@ -734,7 +794,7 @@ export default function CourseDetailPage() {
                                 <Pencil size={14} />
                               </button>
                             )}
-                            {canManage && (
+                            {canModifyTopic(topic) && (
                               <button
                                 onClick={() => {
                                   const confirmed = window.confirm(
@@ -756,9 +816,9 @@ export default function CourseDetailPage() {
 
                       {isExpanded && (
                         <tr className="border-b border-border bg-bg-main/30">
-                          <td colSpan={7} className="p-4">
-                            <div className="space-y-4">
-                              {canManage && editingTopicId === topic.id && (
+                          <td colSpan={7} className="p-4" onClick={(e) => e.stopPropagation()}>
+                            <div className="space-y-4" onClick={(e) => e.stopPropagation()}>
+                              {canModifyTopic(topic) && editingTopicId === topic.id && (
                                 <div className="rounded-xl border border-border bg-white p-4">
                                   <div className="mb-3 flex items-center justify-between">
                                     <h4 className="text-sm font-semibold">Edit Topic</h4>
@@ -846,25 +906,34 @@ export default function CourseDetailPage() {
                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                   <div>
                                     <h4 className="text-sm font-medium">Materials ({topicMaterials.length})</h4>
-                                    {canManage && (
+                                    {canModifyTopic(topic) && (
                                       <p className="mt-1 text-xs text-text-muted">
                                         Supported: {SUPPORTED_MATERIAL_LABEL}
                                       </p>
                                     )}
+                                    {isEnrolledStudent && !canModifyTopic(topic) && (
+                                      <p className="mt-1 text-xs text-text-muted">
+                                        Use <span className="font-medium">Add Topic</span> for your own private topic, then
+                                        upload. Tutor files are read-only here.
+                                      </p>
+                                    )}
                                   </div>
 
-                                  {canManage && (
+                                  {canModifyTopic(topic) && (
                                     <label
                                       className={`btn-secondary inline-flex cursor-pointer items-center gap-2 text-xs ${
-                                        isUploadingHere ? 'pointer-events-none opacity-80' : ''
+                                        isUploadingHere ? 'pointer-events-none opacity-90' : ''
                                       }`}
                                     >
-                                      {isUploadingHere ? (
-                                        <Loader2 size={14} className="animate-spin text-primary" />
-                                      ) : (
-                                        <Upload size={14} />
+                                      <Upload size={14} className="shrink-0" />
+                                      {isUploadingHere && (
+                                        <Loader2
+                                          size={14}
+                                          className="shrink-0 animate-spin text-primary"
+                                          aria-label="Uploading"
+                                        />
                                       )}
-                                      {isUploadingHere ? 'Uploading…' : 'Upload File'}
+                                      {isUploadingHere ? 'Uploading…' : 'Upload file'}
                                       <input
                                         type="file"
                                         className="hidden"
@@ -876,17 +945,10 @@ export default function CourseDetailPage() {
                                   )}
                                 </div>
 
-                                {fileFormatWarning && uploadingTopicId === null && (
+                                {fileFormatWarning?.topicId === topic.id && (
                                   <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
                                     <span className="shrink-0">⚠</span>
-                                    <span>{fileFormatWarning}</span>
-                                  </div>
-                                )}
-
-                                {uploadSuccessTopicId === topic.id && (
-                                  <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-700">
-                                    <CheckCircle2 size={14} className="shrink-0 text-green-600" />
-                                    <span>File uploaded successfully</span>
+                                    <span>{fileFormatWarning.message}</span>
                                   </div>
                                 )}
                               </div>
@@ -912,7 +974,7 @@ export default function CourseDetailPage() {
                                           )}
 
                                           <div className="min-w-0 flex-1">
-                                            {canManage && isEditingMaterial ? (
+                                            {canModifyTopic(topic) && isEditingMaterial ? (
                                               <div className="space-y-3">
                                                 <div>
                                                   <label className="label text-xs">Material title</label>
@@ -988,12 +1050,23 @@ export default function CourseDetailPage() {
                                             )}
                                           </div>
 
-                                          <div className="flex shrink-0 items-center gap-1">
+                                          <div className="flex shrink-0 items-center gap-0.5">
+                                            {!isEditingMaterial && (
+                                              <Link
+                                                to={`/ai-tutor?topicId=${topic.id}&courseId=${courseId}`}
+                                                className="rounded p-1.5 text-primary hover:bg-primary-light"
+                                                title="Study with AI"
+                                                onClick={(e) => e.stopPropagation()}
+                                              >
+                                                <Bot size={14} />
+                                              </Link>
+                                            )}
                                             <span className="rounded-full bg-bg-main px-2 py-1 text-[11px] font-medium text-text-secondary">
                                               {getMaterialBadgeLabel(material)}
                                             </span>
-                                            {canManage && !isEditingMaterial && (
+                                            {canModifyTopic(topic) && !isEditingMaterial && (
                                               <button
+                                                type="button"
                                                 onClick={() => openMaterialEditor(topic.id, material)}
                                                 className="rounded p-1.5 text-primary hover:bg-primary-light"
                                                 title="Edit material"
@@ -1001,8 +1074,9 @@ export default function CourseDetailPage() {
                                                 <Pencil size={14} />
                                               </button>
                                             )}
-                                            {canManage && !isEditingMaterial && (
+                                            {canModifyTopic(topic) && !isEditingMaterial && (
                                               <button
+                                                type="button"
                                                 onClick={() => {
                                                   const confirmed = window.confirm(
                                                     `Delete "${material.title}" from this topic?`
@@ -1041,7 +1115,7 @@ export default function CourseDetailPage() {
       </div>
 
       {/* ── Student Study Log ─────────────────────────────────────────────── */}
-      {course.enrollment && !canManage && (
+      {isEnrolledStudent && !canManageCourse && (
         <div className="mt-6">
           {/* Today's attendance status banner */}
           {course.todayAttendance && (

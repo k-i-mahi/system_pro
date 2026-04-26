@@ -1,66 +1,59 @@
 \chapter{Introduction}
 
-\section{Introduction}
-A single tool is seldom enough for academic life today. Students balance course portals, separate channels for help, and improvised AI assistants that do not know which subject or reading they should follow. That everyday friction is what led us to build \textbf{Cognitive Copilot}: a web application where routine LMS work and AI-assisted study share the same accounts, the same course data, and the same expectations about roles and permissions.
+\section{Background}
+There is still a tendency to divide academic workflows in most universities among several tools. Students tend to apply one system to.
+courses, one more communication, and dedicated AI support platforms. This discontinuity produces redundant context.
+alternating and poor continuity between instructional resources and learning support.
 
-This chapter states the background and the problem we set out to solve, together with the objectives and scope, why the idea is not a direct copy of any single existing product, how we planned the work, and how we divided responsibilities between team members.
-
-\section{Background and Problem Statement}
-Academic workflows in many universities are still spread across several tools. Students often use one system for courses, another for communication, and separate platforms for AI support. That fragmentation means constant context switching and weak continuity between teaching materials and study support.
-
-\textbf{Cognitive Copilot} is built as one platform that combines LMS workflows and AI qssisted study. It is not meant to replace classroom teaching, but to offer a structured digital space where students and tutors interact around the same course information.
-
-The following practical problems motivated us:
+To overcome this, the project Cognitive Copilot is proposed as one platform that integrates LMS workflows and.
+AI-assisted study. It is not aimed at substituting academic teaching, but to make available a structured digital space in which.
+students and tutors are able to communicate on the same course information.
+$ $
+\section{Problem Statement}
+The practical problems that drive the project are:
 \begin{enumerate}[label=\arabic*.]
-\item Course resources, routine, and communication are not unified in a single workflow.
-\item AI chat tools are often detached from course materials, which leads to low context answers.
-\item Many systems offer partial features, but CRUD behavior, validation, and role based interactions are not always handled consistently.
-\item When the architecture is not modular, deployment and maintenance become difficult.
+	item Course resources, routine, and communication are not integrated into a single workflow.
+	|human|>item AI chat tools tend to be uncoupled with course material, leading to low-context responses.
+	item CRUD behavior, validation and role-based interaction is inconsistently addressed in many systems, which offer partial features.
+	item When architecture is not modular, deployment and maintenance are challenging.
 \end{enumerate}
 
-\section{Objectives}
-This work has the following aims:
+\section{Project Objectives}
+The aims of this work are:
 \begin{enumerate}[label=\arabic*.]
-\item Implement a role aware LMS with core modules: authentication, courses, routine, community, notifications, analytics, settings, and profile.
-\item Build an AI Tutor workspace merged with course and topic context and several study modes.
-\item Support practical material workflows such as upload and retrieval assisted question answering.
-\item Keep CRUD operations reliable across modules with clear request validation and authorization checks.
-\item Deliver a deployable full stack implementation suitable for local development and demonstration.
+	item Installing a role-aware LMS with essential modules: authentication, courses, routine, community, notifications,
+	analytics, settings, and profile.
+	item Create an AI Tutor workspace with course/topic context, and study modes.
+	item Support real world material workflows such as upload and retrieval-assisted question answering.
+	item Provide well-defined request validation and authorization checks in the modules that have reliable CRUD operations.
+	item Deployable full-stack Implementation: Provide a deployable full-stack implementation that can be used to develop and demonstrate locally.
 \end{enumerate}
-
-\section{Scope of the Project (Modern Tools and Boundaries)}
-The implemented scope includes:
+The Project has the following scope.
+The scope implemented consists of:
 \begin{itemize}
-\item User authentication, profile, and settings management.
-\item Course, topic, and material management.
-\item Routine and attendance related workflows.
-\item Community classrooms, threads, announcements, and member interactions.
-\item A notification feed with real time update handling.
-\item Analytics dashboards for students and tutors.
-\item AI Tutor modes for guided learning interactions.
+	item user authentication, profile and settings.
+	item Management of courses, topics and materials.
+	item Workflows of routine and attendance.
+	item Community classes, community threads, community announcements, and community interactions.
+	item Notification feed that supports real time updating.
+	item Student and tutor analytics.
+	item AI Tutor guided learning interaction.
 \end{itemize}
 
-Out of scope items for this report include native mobile clients and institution-wide multi-tenant deployment policies.
+This report has out-of-scope items such as mobile-native clients and institution-wide multi-tenant deployment policies.
 
-The frontend is built with React, TypeScript, and Vite; TanStack Query and Zustand help with server state and UI state. The backend uses Python with FastAPI and Pydantic, and SQLAlchemy for asynchronous access to PostgreSQL. Redis supports caching and background jobs; workers handle longer tasks such as ingestion and OCR. Docker Compose containerizes the stack for a reproducible local environment. These choices reflect what is sustainable for a student project while still aligning with common industry practice.
-
-\section{Unfamiliarity of the Problem, Topic, and Solution}
-Neither an LMS nor an AI tutor is new by itself. What we set out to do differently is \emph{integration under one engineering story}: the same role model, the same course entities, and the same API discipline for both traditional LMS pages and the AI Tutor workspace. We did not mirror a single commercial product; we composed open patterns (REST APIs, modular services, retrieval assisted answering, local model hosting) into a system that fits our course requirements.
-
-Our contribution is best described as \textbf{software integration and dependable behavior}---clear contracts between modules, validated inputs, and tutor flows that stay tied to course and topic context---rather than claiming a new learning algorithm. Chapter~II discusses related work and situates this project among existing systems and research directions.
-
-\section{Project Planning and Work Distribution}
-We organized the work in overlapping phases: requirements and module boundaries, backend foundations (auth, schema, core CRUD), frontend pages aligned with those APIs, the AI Tutor and asynchronous ingestion, then integration, testing, and report writing. Where possible we used short iterations: implement a slice end to end, stabilize it, then move on.
-
-Both team members worked across frontend and backend; we split ownership mainly by module to limit conflicting edits and to keep reviews focused. One member led authentication, profile, settings, routine, and analytics-related paths; the other led courses and materials, community, notifications, and the AI Tutor UI and wiring. Shared tasks included database modeling decisions, Docker-based integration testing, diagram preparation, and final proofreading of the report. A formal Gantt chart is not included as a figure in this version, but the chapter order of the report follows the sequence we used in development.
+\section{Project Significance}
+Cognitive Copilot is important because it is an engineering integration. Rather than making LMS and AI independent of each other.
+products, this project holds them in a single consistent system in which actions of AI are tied to course context and user role.
+This gives a more useful academic resource and a superior software engineering artifact to use later.
 
 \section{Report Organization}
-The remainder of the report is organized as follows:
+The report is structured in the following way:
 \begin{itemize}
-\item Chapter~II describes applications of the work, how the repository is organized, related literature, and a short discussion of novelty.
-\item Chapter~III presents methodology: analysis, architecture, and modeling diagrams.
-\item Chapter~IV covers experimental setup, evaluation, implementation, results, and how objectives were met.
-\item Chapter~V addresses societal, ethical, legal, safety, and environmental considerations.
-\item Chapter~VI maps the project to complex engineering problems and activities.
-\item Chapter~VII concludes with summary, limitations, and future work.
+	item Chapter II addresses pertinent technical and academic context.
+	item Chapter III: system design and architecture.
+	item Chapter IV tells how each core module is implemented.
+	item Chapter V introduces validation and testing approach.
+	item Chapter VI addresses the societal, ethical, legal, and operational considerations.
+	item Chapter VII summarizes the project and gives improvement in the future.
 \end{itemize}

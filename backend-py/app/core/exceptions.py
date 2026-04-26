@@ -38,3 +38,8 @@ class ValidationError(AppError):
 class RateLimitError(AppError):
     def __init__(self, message: str = "Too many requests, try again later") -> None:
         super().__init__(status_code=429, detail={"code": "RATE_LIMIT", "message": message})
+
+
+class ServiceUnavailableError(AppError):
+    def __init__(self, message: str = "Service temporarily unavailable") -> None:
+        super().__init__(status_code=503, detail={"code": "SERVICE_UNAVAILABLE", "message": message})

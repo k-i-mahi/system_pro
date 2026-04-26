@@ -45,7 +45,11 @@ def _format_context(chunks: list[RetrievedChunk]) -> str:
     parts = []
     for i, c in enumerate(chunks):
         locator = " · ".join(filter(None, [c.material_title, f"p.{c.page}" if c.page else None, f"§ {c.heading}" if c.heading else None]))
-        parts.append(f"[{i + 1}] {locator}\n{c.content}")
+        # Keep prompts compact to avoid slow/timeout-prone chat calls on CPU-only Ollama.
+        snippet = (c.content or "").strip()
+        if len(snippet) > 900:
+            snippet = snippet[:900].rstrip() + " ..."
+        parts.append(f"[{i + 1}] {locator}\n{snippet}")
     return "\n\n".join(parts)
 
 

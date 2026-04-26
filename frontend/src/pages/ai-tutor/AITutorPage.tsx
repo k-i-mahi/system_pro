@@ -42,6 +42,7 @@ interface Topic {
 interface CourseDetail {
   id: string;
   topics?: Topic[];
+  enrollment?: { id?: string } | null;
 }
 
 const EXPLAIN_PRIMER =
@@ -58,7 +59,6 @@ const CHAT_QUICK_ACTIONS = [
 
 export default function AITutorPage() {
   const user = useAuthStore((s) => s.user);
-  const canAddTopicsOnCourse = canUploadMaterial(user);
   const [searchParams] = useSearchParams();
   const initialTopicId = searchParams.get('topicId') || '';
   const initialCourseId = searchParams.get('courseId') || '';
@@ -102,6 +102,12 @@ export default function AITutorPage() {
   const selectedTopicObj = useMemo(
     () => courseDetail?.topics?.find((t) => t.id === selectedTopic),
     [courseDetail, selectedTopic]
+  );
+
+  const canAddTopicsOnCoursePage = useMemo(
+    () =>
+      canUploadMaterial(user) || (user?.role === 'STUDENT' && Boolean(courseDetail?.enrollment)),
+    [user, courseDetail?.enrollment]
   );
 
   /** All indexed-file rows for Ask Course: one topic, or de-duplicated across course when "All topics". */
@@ -175,7 +181,7 @@ export default function AITutorPage() {
                 ) : (
                   <p className="text-xs leading-relaxed text-text-secondary">
                     No week topics in this course yet, so Ask Course searches all course materials when you upload them.{' '}
-                    {canAddTopicsOnCourse ? (
+                    {canAddTopicsOnCoursePage ? (
                       <Link
                         to={`/courses/${selectedCourse}`}
                         className="font-medium text-primary hover:underline"

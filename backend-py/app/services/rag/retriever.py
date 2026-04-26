@@ -119,11 +119,11 @@ async def _vector_search(db: AsyncSession, vec_literal: str, material_ids: list[
         SELECT
           e."id", e."materialId", m."title" AS "materialTitle",
           e."chunkIndex", e."content", e."page", e."heading",
-          (e."embedding" <=> :vec::vector) AS distance
+          (e."embedding" <=> CAST(:vec AS vector)) AS distance
         FROM "Embedding" e
         JOIN "Material" m ON m."id" = e."materialId"
         {where}
-        ORDER BY e."embedding" <=> :vec::vector
+        ORDER BY e."embedding" <=> CAST(:vec AS vector)
         LIMIT :lim
     """
     params["lim"] = limit

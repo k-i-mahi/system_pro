@@ -5,6 +5,7 @@ import base64
 import io
 import logging
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Literal
@@ -16,6 +17,22 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 OcrQuality = Literal["fast", "accurate"]
+
+_easyocr_reader_lock = threading.Lock()
+_easyocr_reader = None
+
+
+def _get_easyocr_reader():
+    """Lazy singleton — constructing Reader per page was crushing ingest (memory + startup time)."""
+    global _easyocr_reader
+    if _easyocr_reader is not None:
+        return _easyocr_reader
+    with _easyocr_reader_lock:
+        if _easyocr_reader is None:
+            import easyocr  # type: ignore
+
+            _easyocr_reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+    return _easyocr_reader
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
@@ -80,7 +97,6 @@ async def _llava(image_bytes: bytes) -> list[str]:
 def _easyocr_text(image_bytes: bytes) -> str:
     """Extract raw text from image using easyocr (pure Python, no Tesseract needed)."""
     try:
-        import easyocr  # type: ignore
         import numpy as np  # type: ignore
         from PIL import Image  # type: ignore
 
@@ -91,7 +107,7 @@ def _easyocr_text(image_bytes: bytes) -> str:
             scale = 1200 / max(w, h)
             img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
 
-        reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+        reader = _get_easyocr_reader()
         results = reader.readtext(np.array(img), detail=0, paragraph=False)
         text = " ".join(results)
         logger.info("easyocr → %d chars: %s", len(text), text[:200])
@@ -182,13 +198,29 @@ def _pdf_raster_easyocr(data: bytes, max_pages: int = 30) -> str:
 # ── Text file extractors ──────────────────────────────────────────────────────
 
 def _pdf_text(data: bytes) -> str:
+    """Prefer PyMuPDF text layer (often better on slide exports), then pdfplumber."""
+    best = ""
+    try:
+        import fitz  # type: ignore  # pymupdf
+
+        doc = fitz.open(stream=data, filetype="pdf")
+        try:
+            parts = [doc.load_page(i).get_text() or "" for i in range(doc.page_count)]
+            best = "\n".join(parts)
+        finally:
+            doc.close()
+    except Exception as exc:
+        logger.debug("pymupdf text extract skipped: %s", exc)
     try:
         import pdfplumber  # type: ignore
+
         with pdfplumber.open(io.BytesIO(data)) as pdf:
-            return "\n".join(p.extract_text() or "" for p in pdf.pages)
+            pl = "\n".join(p.extract_text() or "" for p in pdf.pages)
+        if len(pl.strip()) > len(best.strip()):
+            best = pl
     except Exception as exc:
         logger.warning("pdfplumber failed: %s", exc)
-        return ""
+    return best
 
 
 def _docx_text(data: bytes) -> str:
@@ -223,7 +255,8 @@ async def extract_text_from_file(
     try:
         # ── PDF ──────────────────────────────────────────────────────────────
         if ext == ".pdf":
-            min_chars_for_text = 80
+            # Slide PDFs often have sparse text layers; raster OCR fills the gap below this threshold.
+            min_chars_for_text = 50
             used_sidecar_fallback = False
             text = await _sidecar_pdf(data, filename) if quality == "accurate" else ""
             if not text.strip():
@@ -254,6 +287,12 @@ async def extract_text_from_file(
                     engine = "pdfplumber+sidecar+llama3.2"
                 else:
                     engine = "pdfplumber+llama3.2"
+
+        # ── Plain text (notes, exports) ─────────────────────────────────────
+        elif ext == ".txt":
+            text = data.decode("utf-8", errors="replace")
+            codes = _parse_codes(text)
+            engine = "utf-8-text"
 
         # ── DOCX ─────────────────────────────────────────────────────────────
         elif ext == ".docx":
