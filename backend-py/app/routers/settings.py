@@ -10,7 +10,7 @@ from app.services import settings_service
 router = APIRouter(dependencies=[Depends(get_current_user_id)])
 
 
-@router.get("/")
+@router.get("")
 async def get_settings(db: DBDep, user_id: CurrentUserIdDep):
     data = await settings_service.get_settings(db, user_id)
     return success(data)

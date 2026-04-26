@@ -1,35 +1,65 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import {
   CalendarDays,
   BookOpen,
   Bot,
   Users,
+  Bell,
   BarChart3,
   Settings,
   Shield,
   User,
   LogOut,
+  LayoutDashboard,
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth.store';
 import { useUIStore } from '@/stores/ui.store';
 import { cn } from '@/lib/utils';
+import { isAdmin, isTutor } from '@/lib/rbac';
 import api from '@/lib/api';
 
-const navItems = [
-  { to: '/routine', icon: CalendarDays, label: 'My Routine', tour: undefined },
-  { to: '/courses', icon: BookOpen, label: 'Courses', tour: 'courses' },
-  { to: '/ai-tutor', icon: Bot, label: 'AI Tutor', tour: 'ai-tutor' },
-  { to: '/community', icon: Users, label: 'Community', tour: undefined },
-  { to: '/analytics', icon: BarChart3, label: 'Analytics', tour: 'analytics' },
-  { to: '/settings', icon: Settings, label: 'Settings', tour: undefined },
-  { to: '/profile', icon: User, label: 'Account', tour: undefined },
-];
+interface NavItem {
+  to: string;
+  icon: React.ElementType;
+  label: string;
+  tour?: string;
+}
 
 export default function Sidebar() {
   const { logout } = useAuthStore();
   const user = useAuthStore((s) => s.user);
   const { sidebarCollapsed } = useUIStore();
-  const items = user?.role === 'ADMIN' ? [...navItems, { to: '/admin', icon: Shield, label: 'Admin Panel', tour: undefined }] : navItems;
+  const location = useLocation();
+
+  const items: NavItem[] = isAdmin(user)
+    ? [
+        { to: '/admin', icon: Shield, label: 'Admin Panel' },
+        { to: '/community', icon: Users, label: 'Classrooms' },
+        { to: '/analytics', icon: BarChart3, label: 'Analytics', tour: 'analytics' },
+        { to: '/notifications', icon: Bell, label: 'Notifications' },
+        { to: '/settings', icon: Settings, label: 'Settings' },
+        { to: '/profile', icon: User, label: 'Account' },
+      ]
+    : isTutor(user) && !isAdmin(user)
+      ? [
+          { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+          { to: '/courses', icon: BookOpen, label: 'Courses', tour: 'courses' },
+          { to: '/community', icon: Users, label: 'Classrooms' },
+          { to: '/analytics', icon: BarChart3, label: 'Analytics', tour: 'analytics' },
+          { to: '/notifications', icon: Bell, label: 'Notifications' },
+          { to: '/settings', icon: Settings, label: 'Settings' },
+          { to: '/profile', icon: User, label: 'Account' },
+        ]
+      : [
+          { to: '/routine', icon: CalendarDays, label: 'My Routine' },
+          { to: '/courses', icon: BookOpen, label: 'Courses', tour: 'courses' },
+          { to: '/ai-tutor', icon: Bot, label: 'AI Tutor', tour: 'ai-tutor' },
+          { to: '/community', icon: Users, label: 'Community' },
+          { to: '/notifications', icon: Bell, label: 'Notifications' },
+          { to: '/analytics', icon: BarChart3, label: 'Analytics', tour: 'analytics' },
+          { to: '/settings', icon: Settings, label: 'Settings' },
+          { to: '/profile', icon: User, label: 'Account' },
+        ];
 
   async function handleLogout() {
     try {
@@ -38,6 +68,13 @@ export default function Sidebar() {
       // ignore - clear local state regardless
     }
     logout();
+  }
+
+  function isItemActive(item: NavItem, routeActive: boolean) {
+    if (item.to === '/settings') {
+      return location.pathname === '/settings';
+    }
+    return routeActive;
   }
 
   return (
@@ -69,7 +106,7 @@ export default function Sidebar() {
             className={({ isActive }) =>
               cn(
                 'sidebar-link',
-                isActive ? 'sidebar-link-active' : 'sidebar-link-inactive',
+                isItemActive(item, isActive) ? 'sidebar-link-active' : 'sidebar-link-inactive',
                 sidebarCollapsed && 'justify-center px-2'
               )
             }

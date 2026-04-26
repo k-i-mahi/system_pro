@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import AppLayout from '@/components/layout/AppLayout';
+import RoleRoute from '@/components/auth/RoleRoute';
 import LoginPage from '@/pages/auth/LoginPage';
 import RegisterPage from '@/pages/auth/RegisterPage';
 import ForgotPasswordPage from '@/pages/auth/ForgotPasswordPage';
@@ -17,6 +18,7 @@ import LandingPage from '@/pages/landing/LandingPage';
 import SettingsPage from '@/pages/settings/SettingsPage';
 import ProfilePage from '@/pages/profile/ProfilePage';
 import AdminPanelPage from '@/pages/admin/AdminPanelPage';
+import TutorDashboardPage from '@/pages/tutor/TutorDashboardPage';
 
 export default function App() {
   return (
@@ -35,10 +37,32 @@ export default function App() {
         <Route path="/community/:id" element={<ClassroomDetailPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/analytics/evaluation" element={<InstructorEvalPage />} />
+        <Route
+          path="/analytics/evaluation"
+          element={
+            <RoleRoute allowedRoles={['TUTOR', 'ADMIN']}>
+              <InstructorEvalPage />
+            </RoleRoute>
+          }
+        />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/admin" element={<AdminPanelPage />} />
+        <Route
+          path="/dashboard"
+          element={
+            <RoleRoute allowedRoles={['TUTOR']} redirectTo="/courses">
+              <TutorDashboardPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="/admin"
+          element={
+            <RoleRoute allowedRoles={['ADMIN']}>
+              <AdminPanelPage />
+            </RoleRoute>
+          }
+        />
       </Route>
       <Route path="*" element={<Navigate to="/routine" replace />} />
     </Routes>

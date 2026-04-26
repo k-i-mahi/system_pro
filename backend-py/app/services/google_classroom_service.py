@@ -11,12 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import UnauthorizedError, ValidationError
-from app.models.enums import DayOfWeek, SlotType
+from app.models.enums import DayOfWeek, Role, SlotType
+from app.models.user import User
 from app.schemas.routine import BulkCreateCoursesRequest, BulkCourseInput, SlotInput
 from app.services import routine_service
 
 _GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 _GOOGLE_CLASSROOM_COURSES_URL = "https://classroom.googleapis.com/v1/courses"
 _GOOGLE_CLASSWORK_URL = "https://classroom.googleapis.com/v1/courses/{course_id}/courseWork"
 _STATE_TTL_SECONDS = 10 * 60
@@ -25,6 +27,7 @@ _SCOPES = [
     "email",
     "profile",
     "https://www.googleapis.com/auth/classroom.courses.readonly",
+    "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
 ]
 
 
@@ -32,6 +35,11 @@ def _require_google_config() -> tuple[str, str, str]:
     if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET or not settings.GOOGLE_REDIRECT_URI:
         raise ValidationError("Google Classroom is not configured on server")
     return settings.GOOGLE_CLIENT_ID, settings.GOOGLE_CLIENT_SECRET, settings.GOOGLE_REDIRECT_URI
+
+
+def _frontend_redirect(status: str) -> str:
+    frontend = settings.FRONTEND_URL.rstrip("/")
+    return f"{frontend}/settings?tab=integrations&googleClassroom={status}"
 
 
 async def create_connect_url(redis: aioredis.Redis, user_id: str) -> str:
@@ -50,11 +58,16 @@ async def create_connect_url(redis: aioredis.Redis, user_id: str) -> str:
     return f"{_GOOGLE_AUTH_URL}?{urlencode(params)}"
 
 
-async def handle_callback(redis: aioredis.Redis, code: str, state: str) -> str:
+async def handle_callback(db: AsyncSession, redis: aioredis.Redis, code: str, state: str) -> str:
     client_id, client_secret, redirect_uri = _require_google_config()
     user_id = await redis.get(f"gclass:state:{state}")
     if not user_id:
-        return f"{settings.FRONTEND_URL}/settings?googleClassroom=error"
+        return _frontend_redirect("error")
+
+    user = await db.get(User, user_id)
+    if not user or user.role != Role.STUDENT:
+        await redis.delete(f"gclass:state:{state}")
+        return _frontend_redirect("student-only")
 
     token_payload = {
         "code": code,
@@ -67,19 +80,39 @@ async def handle_callback(redis: aioredis.Redis, code: str, state: str) -> str:
         token_res = await client.post(_GOOGLE_TOKEN_URL, data=token_payload)
     if token_res.status_code >= 400:
         await redis.delete(f"gclass:state:{state}")
-        return f"{settings.FRONTEND_URL}/settings?googleClassroom=error"
+        return _frontend_redirect("error")
 
     token_data = token_res.json()
+    access_token = token_data.get("access_token")
+    if not access_token:
+        await redis.delete(f"gclass:state:{state}")
+        return _frontend_redirect("error")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        userinfo_res = await client.get(
+            _GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    if userinfo_res.status_code >= 400:
+        await redis.delete(f"gclass:state:{state}")
+        return _frontend_redirect("error")
+
+    google_email = str(userinfo_res.json().get("email") or "").strip().lower()
+    if not google_email or google_email != user.email.strip().lower():
+        await redis.delete(f"gclass:state:{state}")
+        return _frontend_redirect("email-mismatch")
+
     expires_in = int(token_data.get("expires_in", 3600))
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
     save_data = {
-        "access_token": token_data.get("access_token"),
+        "access_token": access_token,
         "refresh_token": token_data.get("refresh_token"),
         "expires_at": expires_at,
+        "google_email": google_email,
     }
     await redis.set(f"gclass:tokens:{user_id}", json.dumps(save_data), ex=30 * 24 * 60 * 60)
     await redis.delete(f"gclass:state:{state}")
-    return f"{settings.FRONTEND_URL}/settings?googleClassroom=connected"
+    return _frontend_redirect("connected")
 
 
 async def _refresh_access_token_if_needed(redis: aioredis.Redis, user_id: str) -> str:
@@ -125,7 +158,7 @@ async def list_classrooms(redis: aioredis.Redis, user_id: str) -> list[dict]:
         res = await client.get(
             _GOOGLE_CLASSROOM_COURSES_URL,
             headers={"Authorization": f"Bearer {token}"},
-            params={"courseStates": ["ACTIVE"]},
+            params={"courseStates": ["ACTIVE"], "studentId": "me"},
         )
     if res.status_code >= 400:
         raise ValidationError("Failed to fetch Google Classroom courses")
@@ -167,6 +200,8 @@ async def list_assignments(redis: aioredis.Redis, user_id: str, course_id: str) 
             headers={"Authorization": f"Bearer {token}"},
             params={"courseWorkStates": ["PUBLISHED"]},
         )
+    if res.status_code == 403:
+        raise ValidationError("Reconnect Google Classroom to grant assignment access")
     if res.status_code >= 400:
         raise ValidationError("Failed to fetch Google Classroom assignments")
     work = res.json().get("courseWork", []) or []
@@ -186,7 +221,13 @@ async def list_assignments(redis: aioredis.Redis, user_id: str, course_id: str) 
 
 async def connection_status(redis: aioredis.Redis, user_id: str) -> dict:
     raw = await redis.get(f"gclass:tokens:{user_id}")
-    return {"connected": bool(raw)}
+    if not raw:
+        return {"connected": False, "email": None}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"connected": True, "email": None}
+    return {"connected": True, "email": data.get("google_email")}
 
 
 async def disconnect(redis: aioredis.Redis, user_id: str) -> None:

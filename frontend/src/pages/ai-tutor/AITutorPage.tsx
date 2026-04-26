@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import api from '@/lib/api';
+import { canUploadMaterial } from '@/lib/rbac';
+import { useAuthStore } from '@/stores/auth.store';
 import {
   AskCoursePane,
   ChatPane,
@@ -23,6 +25,7 @@ interface CourseListItem {
 interface MaterialRow {
   id: string;
   title: string;
+  topicId?: string;
   fileType?: string;
   hasEmbeddings?: boolean;
   ingestStatus?: string;
@@ -54,6 +57,8 @@ const CHAT_QUICK_ACTIONS = [
 ];
 
 export default function AITutorPage() {
+  const user = useAuthStore((s) => s.user);
+  const canAddTopicsOnCourse = canUploadMaterial(user);
   const [searchParams] = useSearchParams();
   const initialTopicId = searchParams.get('topicId') || '';
   const initialCourseId = searchParams.get('courseId') || '';
@@ -72,7 +77,7 @@ export default function AITutorPage() {
       api.get('/courses/my-courses').then((r) => r.data.data as CourseListItem[]),
   });
 
-  const { data: courseDetail } = useQuery({
+  const { data: courseDetail, isPending: courseDetailLoading } = useQuery({
     queryKey: ['course', selectedCourse],
     queryFn: () =>
       api
@@ -81,8 +86,10 @@ export default function AITutorPage() {
     enabled: !!selectedCourse,
     refetchInterval: (query) => {
       const data = query.state.data as CourseDetail | undefined;
-      const topic = data?.topics?.find((t) => t.id === selectedTopic);
-      const mats = topic?.materials ?? [];
+      const topics = data?.topics ?? [];
+      const mats = selectedTopic
+        ? (topics.find((t) => t.id === selectedTopic)?.materials ?? [])
+        : topics.flatMap((t) => t.materials ?? []);
       const ingesting = mats.some(
         (m) =>
           m.fileType !== 'LINK' &&
@@ -96,6 +103,21 @@ export default function AITutorPage() {
     () => courseDetail?.topics?.find((t) => t.id === selectedTopic),
     [courseDetail, selectedTopic]
   );
+
+  /** All indexed-file rows for Ask Course: one topic, or de-duplicated across course when "All topics". */
+  const askCourseMaterials = useMemo(() => {
+    if (!courseDetail?.topics?.length) return undefined;
+    if (selectedTopic) {
+      return selectedTopicObj?.materials;
+    }
+    const byId = new Map<string, MaterialRow>();
+    for (const t of courseDetail.topics) {
+      for (const m of t.materials ?? []) {
+        if (!byId.has(m.id)) byId.set(m.id, m);
+      }
+    }
+    return [...byId.values()];
+  }, [courseDetail, selectedTopic, selectedTopicObj?.materials]);
 
   useEffect(() => {
     setSelectedCourse(searchParams.get('courseId') || '');
@@ -132,21 +154,39 @@ export default function AITutorPage() {
                 ))}
               </select>
             </div>
-            {courseDetail?.topics && courseDetail.topics.length > 0 && (
+            {!!selectedCourse && (
               <div>
                 <label className="label text-xs">Topic</label>
-                <select
-                  className="input text-sm"
-                  value={selectedTopic}
-                  onChange={(e) => setSelectedTopic(e.target.value)}
-                >
-                  <option value="">All topics</option>
-                  {courseDetail.topics.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.title}
-                    </option>
-                  ))}
-                </select>
+                {courseDetailLoading ? (
+                  <p className="text-xs text-text-muted">Loading topics…</p>
+                ) : courseDetail?.topics && courseDetail.topics.length > 0 ? (
+                  <select
+                    className="input text-sm"
+                    value={selectedTopic}
+                    onChange={(e) => setSelectedTopic(e.target.value)}
+                  >
+                    <option value="">All topics</option>
+                    {courseDetail.topics.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.title}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <p className="text-xs leading-relaxed text-text-secondary">
+                    No week topics in this course yet, so Ask Course searches all course materials when you upload them.{' '}
+                    {canAddTopicsOnCourse ? (
+                      <Link
+                        to={`/courses/${selectedCourse}`}
+                        className="font-medium text-primary hover:underline"
+                      >
+                        Add topics on the course page
+                      </Link>
+                    ) : (
+                      'Ask your instructor to add week topics and upload materials there.'
+                    )}
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -188,7 +228,7 @@ export default function AITutorPage() {
               <AskCoursePane
                 courseId={selectedCourse || undefined}
                 topicId={selectedTopic || undefined}
-                materials={selectedTopicObj?.materials}
+                materials={askCourseMaterials}
                 onCitationClick={setPreviewCitation}
               />
             )}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, time, timezone
 
 from sqlalchemy import func, select
@@ -12,6 +13,8 @@ from app.models.enums import CommunityRole, DayOfWeek, NotificationType
 from app.models.misc import Notification
 from app.models.user import User
 from app.services import notification_service
+
+logger = logging.getLogger(__name__)
 
 
 def _serialize(n: Notification) -> dict:
@@ -162,21 +165,38 @@ async def _ensure_daily_schedule_reminders(db: AsyncSession, user_id: str) -> No
         )
 
 
+def _is_soft_deleted(n: Notification) -> bool:
+    """Return True if this notification was soft-deleted by the user."""
+    meta = n.metadata_ or {}
+    return bool(meta.get("deletedByUser"))
+
+
+async def _sync_daily_schedule_reminders(db: AsyncSession, user_id: str) -> None:
+    """Create today's class/lab rows if missing. Safe to call on list and unread-count."""
+    try:
+        await _ensure_daily_schedule_reminders(db, user_id)
+        await db.commit()
+    except Exception:
+        logger.exception("sync daily schedule reminders failed for user %s", user_id)
+        await db.rollback()
+
+
 async def list_notifications(db: AsyncSession, user_id: str, page: int, limit: int) -> tuple[list[dict], int]:
-    await _ensure_daily_schedule_reminders(db, user_id)
-    await db.commit()
+    await _sync_daily_schedule_reminders(db, user_id)
+
     offset = (page - 1) * limit
     rows = (await db.execute(
         select(Notification)
         .where(Notification.user_id == user_id)
         .order_by(Notification.created_at.desc())
         .offset(offset)
-        .limit(limit)
+        .limit(limit + 200)  # over-fetch to account for soft-deleted
     )).scalars().all()
+    visible = [n for n in rows if not _is_soft_deleted(n)]
     total = (await db.execute(
         select(func.count()).select_from(Notification).where(Notification.user_id == user_id)
     )).scalar_one()
-    return [_serialize(n) for n in rows], total
+    return [_serialize(n) for n in visible[:limit]], total
 
 
 async def mark_read(db: AsyncSession, notif_id: str, user_id: str) -> dict:
@@ -200,20 +220,32 @@ async def mark_all_read(db: AsyncSession, user_id: str) -> dict:
     return {"message": "All marked as read"}
 
 
+_REMINDER_TYPES = {NotificationType.CLASS_REMINDER, NotificationType.LAB_REMINDER, NotificationType.ATTENDANCE_ALERT}
+
+
 async def delete_notification(db: AsyncSession, notif_id: str, user_id: str) -> dict:
     n = (await db.execute(
         select(Notification).where(Notification.id == notif_id, Notification.user_id == user_id)
     )).scalar_one_or_none()
     if not n:
         raise NotFoundError("Notification not found")
-    await db.delete(n)
-    await db.commit()
+    if n.type in _REMINDER_TYPES:
+        # Soft-delete reminders so idempotent worker keys still resolve but they
+        # disappear from the user's notification list.
+        n.metadata_ = {**(n.metadata_ or {}), "deletedByUser": True}
+        n.is_read = True
+        await db.commit()
+    else:
+        await db.delete(n)
+        await db.commit()
     return {"message": "Notification deleted"}
 
 
 async def get_unread_count(db: AsyncSession, user_id: str) -> dict:
-    await _ensure_daily_schedule_reminders(db, user_id)
-    await db.commit()
+    # Same materialization as list, so the bell refetches created rows and users see alerts without
+    # opening the full notifications page first.
+    await _sync_daily_schedule_reminders(db, user_id)
+
     count = (await db.execute(
         select(func.count()).select_from(Notification).where(
             Notification.user_id == user_id, Notification.is_read == False  # noqa: E712
@@ -243,6 +275,21 @@ async def submit_class_response(db: AsyncSession, user_id: str, payload: dict) -
     if not slot_id or not reminder_date:
         raise ValidationError("Missing slot context in reminder", code="INVALID_NOTIFICATION_METADATA")
 
+    action = payload.get("action", "attended")
+
+    # ── "I missed class" path ────────────────────────────────────────────────
+    if action == "missed":
+        notif.metadata_ = {
+            **metadata,
+            "resolved": True,
+            "missedClass": True,
+            "respondedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        notif.is_read = True
+        await db.commit()
+        return {"message": "Marked as missed class — reminder resolved"}
+
+    # ── "I attended" path ────────────────────────────────────────────────────
     attendance_dt = datetime.fromisoformat(f"{reminder_date}T00:00:00+00:00")
     slot = await db.get(ScheduleSlot, slot_id)
     if not slot:
@@ -263,14 +310,14 @@ async def submit_class_response(db: AsyncSession, user_id: str, payload: dict) -
         db.add(AttendanceRecord(user_id=user_id, slot_id=slot_id, date=attendance_dt, present=True))
 
     response_payload = {
-        "topicCovered": payload["topicCovered"].strip(),
+        "topicCovered": (payload.get("topicCovered") or "").strip(),
         "materialNeeded": bool(payload.get("materialNeeded", False)),
         "materialRequest": (payload.get("materialRequest") or "").strip() or None,
         "notes": (payload.get("notes") or "").strip() or None,
         "respondedAt": datetime.now(timezone.utc).isoformat(),
     }
 
-    notif.metadata_ = {**metadata, "classResponse": response_payload}
+    notif.metadata_ = {**metadata, "resolved": True, "classResponse": response_payload}
     notif.is_read = True
 
     student = await db.get(User, user_id)
@@ -294,6 +341,7 @@ async def submit_class_response(db: AsyncSession, user_id: str, payload: dict) -
         tutor_ids.discard(user_id)
 
         for tutor_id in tutor_ids:
+            notif_key = f"class_response:{slot_id}:{reminder_date}:{tutor_id}"
             await notification_service.create_notification(
                 db=db,
                 user_id=tutor_id,
@@ -308,6 +356,7 @@ async def submit_class_response(db: AsyncSession, user_id: str, payload: dict) -
                     )
                 ),
                 metadata={
+                    "notificationKey": notif_key,
                     "courseId": course.id,
                     "courseCode": course.course_code,
                     "slotId": slot_id,

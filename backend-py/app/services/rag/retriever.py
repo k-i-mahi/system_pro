@@ -80,13 +80,17 @@ async def _resolve_material_scope(db: AsyncSession, scope: RetrievalScope) -> li
     if scope.material_ids:
         return scope.material_ids
 
-    conditions = ["m.\"hasEmbeddings\" = true"]
+    conditions = ['m."hasEmbeddings" = true']
     params: dict = {}
 
     if scope.course_id:
         conditions.append('t."courseId" = :course_id')
         params["course_id"] = scope.course_id
     elif scope.topic_id:
+        conditions.append('m."topicId" = :topic_id')
+        params["topic_id"] = scope.topic_id
+    if scope.course_id and scope.topic_id:
+        # Previously only course was applied — user-selected topic was ignored.
         conditions.append('m."topicId" = :topic_id')
         params["topic_id"] = scope.topic_id
 

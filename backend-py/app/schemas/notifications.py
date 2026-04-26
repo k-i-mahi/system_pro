@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class PaginationQuery(BaseModel):
@@ -10,7 +12,16 @@ class PaginationQuery(BaseModel):
 
 class ClassResponseRequest(BaseModel):
     notificationId: str
-    topicCovered: str = Field(min_length=2, max_length=200)
+    action: Literal['attended', 'missed'] = 'attended'
+    topicCovered: str | None = Field(default=None, max_length=200)
     materialNeeded: bool = False
     materialRequest: str | None = Field(default=None, max_length=500)
     notes: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode='after')
+    def validate_topic_for_attended(self) -> 'ClassResponseRequest':
+        if self.action == 'attended':
+            topic = (self.topicCovered or '').strip()
+            if len(topic) < 2:
+                raise ValueError('topicCovered must be at least 2 characters when action is "attended"')
+        return self

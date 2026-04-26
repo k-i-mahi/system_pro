@@ -161,6 +161,24 @@ services:
       timeout: 5s
       retries: 6
 
+  # ARQ worker for schedule reminders and 11 PM follow-ups
+  notification-worker:
+    profiles: ['prod-local', 'prod']
+    build:
+      context: ./backend-py
+      dockerfile: Dockerfile
+    container_name: copilot-notification-worker
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-copilot}:${POSTGRES_PASSWORD:-copilot}@postgres:5432/${POSTGRES_DB:-copilot_db}
+      REDIS_URL: redis://redis:6379/0
+      ARQ_REDIS_URL: redis://redis:6379/2
+      AUTH_SECRET: ${AUTH_SECRET}
+    command: ["python", "-m", "arq", "app.workers.notification_worker.WorkerSettings"]
+
   frontend:
     profiles: ['prod-local', 'prod']
     build:

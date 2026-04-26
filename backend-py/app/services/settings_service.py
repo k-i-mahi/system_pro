@@ -59,6 +59,10 @@ async def update_notifications(db: AsyncSession, user_id: str, data: dict) -> di
     if not user:
         raise NotFoundError("User not found")
     field_map = {
+        # notifChat        → community messages & thread replies
+        # notifNewestUpdate → class reminders, follow-ups, material upload prompts
+        # notifCourseOfMonth → system announcements
+        # notifMentorOfMonth → reserved (no mentor role currently)
         "notifChat": "notif_chat",
         "notifNewestUpdate": "notif_newest_update",
         "notifMentorOfMonth": "notif_mentor_of_month",

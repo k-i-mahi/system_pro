@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -12,10 +12,12 @@ import {
   FileSpreadsheet,
   CheckCircle,
   XCircle,
+  CalendarCheck,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth.store';
+import { canManageClassroom } from '@/lib/rbac';
 import toast from 'react-hot-toast';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -43,6 +45,7 @@ type MarkUploadHistory = {
   id: string;
   processedCount: number;
   errorCount: number;
+  errors?: { row?: number; rollNumber?: string | null; reason?: string }[];
   createdAt: string;
   fileUrl: string;
   uploader?: { name?: string };
@@ -67,6 +70,15 @@ type CommunityMember = {
   user?: { id: string; name?: string; email?: string; rollNumber?: string | null };
 };
 
+type ScheduleSlot = {
+  id: string;
+  dayOfWeek: string;
+  startTime: string;
+  endTime: string;
+  type?: string | null;
+  room?: string | null;
+};
+
 export default function ClassroomDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -80,19 +92,18 @@ export default function ClassroomDetailPage() {
   });
 
   const isTutor =
-    community?.createdBy === user?.id ||
-    user?.role === 'ADMIN' ||
+    canManageClassroom(user, community) ||
     (community?.members ?? []).some((m: CommunityMember) => m.user?.id === user?.id && m.role === 'TUTOR');
 
   if (isLoading) return <div className="text-center py-12 text-text-muted">Loading...</div>;
   if (!community) return <div className="text-center py-12 text-text-muted">Community not found</div>;
 
-  const tabs: { key: Tab; label: string; icon: LucideIcon }[] = [
-    { key: 'announcements', label: 'Announcements', icon: Megaphone },
-    { key: 'marks', label: 'Marks', icon: FileSpreadsheet },
-    { key: 'attendance', label: 'Attendance', icon: ClipboardCheck },
-    { key: 'members', label: 'Members', icon: Users },
-  ];
+  const tabs: { key: Tab; label: string; icon: LucideIcon }[] = [{ key: 'announcements', label: 'Announcements', icon: Megaphone }];
+  if (isTutor) {
+    tabs.push({ key: 'marks', label: 'Marks', icon: FileSpreadsheet });
+  }
+  tabs.push({ key: 'attendance', label: 'Attendance', icon: ClipboardCheck });
+  tabs.push({ key: 'members', label: 'Members', icon: Users });
 
   return (
     <div>
@@ -119,9 +130,46 @@ export default function ClassroomDetailPage() {
           <div className="text-right text-sm text-text-muted">
             <p>{community._count?.members} members</p>
             <p>{community.university}</p>
+            <div className="mt-3 flex flex-wrap justify-end gap-2">
+              {community.course?.id && (
+                <Link to={`/courses/${community.course.id}`} className="btn-secondary text-xs">
+                  Open Course Workspace
+                </Link>
+              )}
+              {isTutor && (
+                <Link to="/analytics" className="btn-secondary text-xs">
+                  View Analytics
+                </Link>
+              )}
+            </div>
           </div>
         </div>
       </div>
+
+      {isTutor && (
+        <div className="card mb-4 border border-primary/10 bg-primary-light/30">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div>
+              <p className="text-sm font-semibold text-text-primary">Announcements stay here</p>
+              <p className="mt-1 text-xs text-text-secondary">
+                Post classroom updates once and every student member gets notified immediately.
+              </p>
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-text-primary">Marks stay here</p>
+              <p className="mt-1 text-xs text-text-secondary">
+                Upload CT or lab spreadsheets here. Matching students will see their latest scores in the course page.
+              </p>
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-text-primary">Materials stay in the course page</p>
+              <p className="mt-1 text-xs text-text-secondary">
+                Use the linked course workspace for topics and materials so the same course code stays synchronized.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 mb-4 overflow-x-auto">
@@ -141,7 +189,14 @@ export default function ClassroomDetailPage() {
 
       {tab === 'announcements' && <AnnouncementsTab communityId={id!} isTutor={isTutor} />}
       {tab === 'marks' && <MarksTab communityId={id!} isTutor={isTutor} />}
-      {tab === 'attendance' && <AttendanceTab communityId={id!} isTutor={isTutor} />}
+      {tab === 'attendance' && (
+        <AttendanceTab
+          communityId={id!}
+          isTutor={isTutor}
+          members={community.members ?? []}
+          scheduleSlots={community.scheduleSlots ?? []}
+        />
+      )}
       {tab === 'members' && <MembersTab communityId={id!} isTutor={isTutor} members={community.members} />}
     </div>
   );
@@ -159,10 +214,16 @@ function AnnouncementsTab({ communityId, isTutor }: { communityId: string; isTut
     queryFn: () => api.get(`/community/${communityId}/announcements`).then((r) => r.data.data),
   });
 
+  const invalidateNotifs = () => {
+    queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] });
+  };
+
   const createMutation = useMutation({
     mutationFn: () => api.post(`/community/${communityId}/announcements`, form),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['announcements', communityId] });
+      invalidateNotifs();
       setShowForm(false);
       setForm({ title: '', body: '' });
       toast.success('Announcement posted');
@@ -174,6 +235,7 @@ function AnnouncementsTab({ communityId, isTutor }: { communityId: string; isTut
     mutationFn: (annId: string) => api.delete(`/community/${communityId}/announcements/${annId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['announcements', communityId] });
+      invalidateNotifs();
       toast.success('Announcement deleted');
     },
   });
@@ -256,6 +318,11 @@ function MarksTab({ communityId, isTutor }: { communityId: string; isTutor: bool
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const invalidateNotifs = () => {
+    queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] });
+  };
+
   const { data: scores = [] } = useQuery<CommunityScore[]>({
     queryKey: ['community-scores', communityId],
     queryFn: () => api.get(`/community/${communityId}/marks/scores`).then((r) => r.data.data),
@@ -278,6 +345,7 @@ function MarksTab({ communityId, isTutor }: { communityId: string; isTutor: bool
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['community-scores', communityId] });
       queryClient.invalidateQueries({ queryKey: ['marks-history', communityId] });
+      invalidateNotifs();
       const { processed, updated, errors } = res.data.data;
       toast.success(`Processed ${processed} rows, updated ${updated} students. ${errors.length} error(s).`);
     },
@@ -373,7 +441,19 @@ function MarksTab({ communityId, isTutor }: { communityId: string; isTutor: bool
 
 // ─── Attendance Tab ────────────────────────────────────────
 
-function AttendanceTab({ communityId, isTutor }: { communityId: string; isTutor: boolean }) {
+function AttendanceTab({
+  communityId,
+  isTutor,
+  members,
+  scheduleSlots,
+}: {
+  communityId: string;
+  isTutor: boolean;
+  members: CommunityMember[];
+  scheduleSlots: ScheduleSlot[];
+}) {
+  const queryClient = useQueryClient();
+
   // Student view
   const { data: myAttendance } = useQuery<MyAttendance>({
     queryKey: ['my-attendance', communityId],
@@ -381,15 +461,47 @@ function AttendanceTab({ communityId, isTutor }: { communityId: string; isTutor:
     enabled: !isTutor,
   });
 
-  // Tutor view
+  // Tutor view — all records
   const { data: allAttendance = [] } = useQuery<AttendanceRecord[]>({
     queryKey: ['community-attendance', communityId],
     queryFn: () => api.get(`/community/${communityId}/attendance`).then((r) => r.data.data),
     enabled: isTutor,
   });
 
+  // Tutor — recording state
+  const [recording, setRecording] = useState(false);
+  const [sessionDate, setSessionDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [selectedSlotId, setSelectedSlotId] = useState('');
+  const [rolls, setRolls] = useState<Record<string, boolean>>({});
+
+  const students = members.filter((m) => m.role === 'STUDENT');
+
+  function startRecording() {
+    const initial: Record<string, boolean> = {};
+    students.forEach((m) => { if (m.user) initial[m.user.id] = false; });
+    setRolls(initial);
+    setSelectedSlotId(scheduleSlots[0]?.id ?? '');
+    setSessionDate(new Date().toISOString().split('T')[0]);
+    setRecording(true);
+  }
+
+  const recordAttendance = useMutation({
+    mutationFn: () =>
+      api.post(`/community/${communityId}/attendance`, {
+        date: sessionDate,
+        slotId: selectedSlotId,
+        records: students.map((m) => ({ userId: m.user!.id, present: rolls[m.user!.id] ?? false })),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['community-attendance', communityId] });
+      setRecording(false);
+      toast.success('Attendance recorded');
+    },
+    onError: (e: any) =>
+      toast.error(e?.response?.data?.detail ?? 'Failed to record attendance'),
+  });
+
   if (!isTutor) {
-    // Student attendance summary
     const summary = myAttendance?.summary;
     return (
       <div>
@@ -413,7 +525,6 @@ function AttendanceTab({ communityId, isTutor }: { communityId: string; isTutor:
             </div>
           </div>
         )}
-
         {myAttendance?.records?.length === 0 ? (
           <div className="card text-center py-8">
             <ClipboardCheck size={40} className="mx-auto text-text-muted mb-2" />
@@ -440,46 +551,153 @@ function AttendanceTab({ communityId, isTutor }: { communityId: string; isTutor:
     );
   }
 
-  // Tutor view - show all attendance records
+  // ── Tutor view ────────────────────────────────────────────
   return (
-    <div>
-      {allAttendance.length === 0 ? (
-        <div className="card text-center py-8">
-          <ClipboardCheck size={40} className="mx-auto text-text-muted mb-2" />
-          <p className="text-text-secondary">No attendance records yet</p>
+    <div className="space-y-4">
+      {/* Record Session panel */}
+      {recording ? (
+        <div className="card space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-semibold flex items-center gap-2">
+              <CalendarCheck size={18} className="text-primary" /> Record Session
+            </h3>
+            <button className="btn-secondary text-xs" onClick={() => setRecording(false)}>
+              Cancel
+            </button>
+          </div>
+
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label className="label">Date</label>
+              <input
+                type="date"
+                className="input"
+                value={sessionDate}
+                max={new Date().toISOString().split('T')[0]}
+                onChange={(e) => setSessionDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="label">Class slot</label>
+              {scheduleSlots.length > 0 ? (
+                <select
+                  className="input"
+                  value={selectedSlotId}
+                  onChange={(e) => setSelectedSlotId(e.target.value)}
+                >
+                  <option value="">Select slot</option>
+                  {scheduleSlots.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.dayOfWeek} {s.startTime}–{s.endTime}{s.room ? ` (${s.room})` : ''}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="text-sm text-text-muted py-2">No schedule slots found for this course.</p>
+              )}
+            </div>
+          </div>
+
+          {students.length === 0 ? (
+            <p className="text-sm text-text-muted text-center py-4">No students in this classroom yet.</p>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-sm font-medium text-text-secondary">Roll call ({students.length} students)</p>
+                <div className="flex gap-2 text-xs">
+                  <button
+                    className="text-green-600 hover:underline"
+                    onClick={() => setRolls(Object.fromEntries(students.map((m) => [m.user!.id, true])))}
+                  >
+                    Mark all present
+                  </button>
+                  <span className="text-text-muted">·</span>
+                  <button
+                    className="text-red-500 hover:underline"
+                    onClick={() => setRolls(Object.fromEntries(students.map((m) => [m.user!.id, false])))}
+                  >
+                    Mark all absent
+                  </button>
+                </div>
+              </div>
+              {students.map((m) => (
+                <div key={m.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+                  <div>
+                    <p className="font-medium text-sm">{m.user?.name}</p>
+                    <p className="text-xs text-text-muted">{m.user?.rollNumber || m.user?.email}</p>
+                  </div>
+                  <button
+                    onClick={() => setRolls((r) => ({ ...r, [m.user!.id]: !r[m.user!.id] }))}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                      rolls[m.user!.id]
+                        ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                        : 'bg-red-100 text-red-600 hover:bg-red-200'
+                    }`}
+                  >
+                    {rolls[m.user!.id] ? 'Present' : 'Absent'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <button
+              className="btn-primary"
+              disabled={!selectedSlotId || students.length === 0 || recordAttendance.isPending}
+              onClick={() => recordAttendance.mutate()}
+            >
+              {recordAttendance.isPending ? 'Saving…' : 'Submit Attendance'}
+            </button>
+          </div>
         </div>
       ) : (
-        <div className="card overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left">
-                <th className="pb-3 font-medium text-text-secondary">Date</th>
-                <th className="pb-3 font-medium text-text-secondary">Slot</th>
-                <th className="pb-3 font-medium text-text-secondary">Student</th>
-                <th className="pb-3 font-medium text-text-secondary">Roll</th>
-                <th className="pb-3 font-medium text-text-secondary">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {allAttendance.map((r) => (
-                <tr key={r.id}>
-                  <td className="py-2">{new Date(r.date).toLocaleDateString()}</td>
-                  <td className="py-2">{r.slot?.startTime}–{r.slot?.endTime}</td>
-                  <td className="py-2">{r.user?.name}</td>
-                  <td className="py-2 font-mono text-xs">{r.user?.rollNumber || '–'}</td>
-                  <td className="py-2">
-                    {r.present ? (
-                      <span className="text-green-600 flex items-center gap-1"><CheckCircle size={12} /> Present</span>
-                    ) : (
-                      <span className="text-red-500 flex items-center gap-1"><XCircle size={12} /> Absent</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <button className="btn-primary flex items-center gap-2" onClick={startRecording}>
+          <CalendarCheck size={16} /> Record Session
+        </button>
       )}
+
+      {/* Past records */}
+      <div>
+        <p className="text-sm font-medium text-text-secondary mb-2">Past Records</p>
+        {allAttendance.length === 0 ? (
+          <div className="card text-center py-8">
+            <ClipboardCheck size={40} className="mx-auto text-text-muted mb-2" />
+            <p className="text-text-secondary">No attendance records yet</p>
+          </div>
+        ) : (
+          <div className="card overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left">
+                  <th className="pb-3 font-medium text-text-secondary">Date</th>
+                  <th className="pb-3 font-medium text-text-secondary">Slot</th>
+                  <th className="pb-3 font-medium text-text-secondary">Student</th>
+                  <th className="pb-3 font-medium text-text-secondary">Roll</th>
+                  <th className="pb-3 font-medium text-text-secondary">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {allAttendance.map((r) => (
+                  <tr key={r.id}>
+                    <td className="py-2">{new Date(r.date).toLocaleDateString()}</td>
+                    <td className="py-2">{r.slot?.dayOfWeek} {r.slot?.startTime}–{r.slot?.endTime}</td>
+                    <td className="py-2">{r.user?.name}</td>
+                    <td className="py-2 font-mono text-xs">{r.user?.rollNumber || '–'}</td>
+                    <td className="py-2">
+                      {r.present ? (
+                        <span className="text-green-600 flex items-center gap-1"><CheckCircle size={12} /> Present</span>
+                      ) : (
+                        <span className="text-red-500 flex items-center gap-1"><XCircle size={12} /> Absent</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -21,57 +21,76 @@ _ACCEPTED_SPREADSHEET = {
 router = APIRouter(dependencies=[Depends(get_current_user_id)])
 
 
-# ── Threads ───────────────────────────────────────────────────────────────────
+# ── Threads (STUDENT-only public discussion — tutors/admins use Classrooms) ──
 
 @router.get("/threads")
 async def list_threads(
     db: DBDep, user_id: CurrentUserIdDep,
     tab: Optional[str] = None, courseId: Optional[str] = None,
     tag: Optional[str] = None, page: int = 1, limit: int = 20,
+    _role: str = require_role(Role.STUDENT),
 ):
     items, total = await community_service.list_threads(db, user_id, tab, courseId, tag, page, limit)
     return success(items, meta={"page": page, "limit": limit, "total": total})
 
 
 @router.post("/threads")
-async def create_thread(body: CreateThreadRequest, db: DBDep, user_id: CurrentUserIdDep):
+async def create_thread(
+    body: CreateThreadRequest, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.STUDENT),
+):
     data = await community_service.create_thread(db, user_id, body.model_dump())
     return created(data)
 
 
 @router.get("/threads/{thread_id}")
-async def get_thread(thread_id: str, db: DBDep, user_id: CurrentUserIdDep):
+async def get_thread(
+    thread_id: str, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.STUDENT),
+):
     data = await community_service.get_thread(db, thread_id, user_id)
     return success(data)
 
 
 @router.post("/threads/{thread_id}/posts")
-async def create_post(thread_id: str, body: CreatePostRequest, db: DBDep, user_id: CurrentUserIdDep):
+async def create_post(
+    thread_id: str, body: CreatePostRequest, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.STUDENT),
+):
     data = await community_service.create_post(db, thread_id, user_id, body.content, body.fileUrl)
     return created(data)
 
 
 @router.delete("/threads/{thread_id}")
-async def delete_thread(thread_id: str, db: DBDep, user_id: CurrentUserIdDep):
+async def delete_thread(
+    thread_id: str, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.STUDENT),
+):
     data = await community_service.delete_thread(db, thread_id, user_id)
     return success(data)
 
 
 @router.post("/threads/{thread_id}/like")
-async def like_thread(thread_id: str, db: DBDep, user_id: CurrentUserIdDep):
+async def like_thread(
+    thread_id: str, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.STUDENT),
+):
     data = await community_service.like_thread(db, thread_id, user_id)
     return success(data)
 
 
 @router.delete("/threads/{thread_id}/like")
-async def unlike_thread(thread_id: str, db: DBDep, user_id: CurrentUserIdDep):
+async def unlike_thread(
+    thread_id: str, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.STUDENT),
+):
     data = await community_service.unlike_thread(db, thread_id, user_id)
     return success(data)
 
 
 # ── Community CRUD ────────────────────────────────────────────────────────────
 
-@router.post("/")
+@router.post("")
 async def create_community(
     body: CreateCommunityRequest, db: DBDep, user_id: CurrentUserIdDep,
     _role: str = require_role(Role.TUTOR, Role.ADMIN),
@@ -134,7 +153,10 @@ async def list_announcements(community_id: str, db: DBDep, user_id: CurrentUserI
 
 
 @router.delete("/{community_id}/announcements/{announcement_id}")
-async def delete_announcement(community_id: str, announcement_id: str, db: DBDep, user_id: CurrentUserIdDep):
+async def delete_announcement(
+    community_id: str, announcement_id: str, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.TUTOR, Role.ADMIN),
+):
     data = await community_service.delete_announcement(db, announcement_id, user_id)
     return success(data)
 
@@ -155,13 +177,23 @@ async def upload_marks(
 
 
 @router.get("/{community_id}/marks/history")
-async def get_marks_history(community_id: str, db: DBDep, user_id: CurrentUserIdDep):
+async def get_marks_history(
+    community_id: str,
+    db: DBDep,
+    user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.TUTOR, Role.ADMIN),
+):
     data = await community_service.get_marks_history(db, community_id)
     return success(data)
 
 
 @router.get("/{community_id}/marks/scores")
-async def get_community_scores(community_id: str, db: DBDep, user_id: CurrentUserIdDep):
+async def get_community_scores(
+    community_id: str,
+    db: DBDep,
+    user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.TUTOR, Role.ADMIN),
+):
     data = await community_service.get_community_scores(db, community_id)
     return success(data)
 
@@ -185,6 +217,7 @@ async def record_attendance(
 async def get_community_attendance(
     community_id: str, db: DBDep, user_id: CurrentUserIdDep,
     slotId: Optional[str] = None, from_: Optional[str] = None, to: Optional[str] = None,
+    _role: str = require_role(Role.TUTOR, Role.ADMIN),
 ):
     data = await community_service.get_community_attendance(db, community_id, slotId, from_, to)
     return success(data)

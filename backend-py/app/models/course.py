@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Float, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Float, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -72,6 +72,10 @@ class Topic(Base):
         SAEnum(TopicStatus, name="TopicStatus", create_type=False), default=TopicStatus.NOT_STARTED
     )
     created_at: Mapped[datetime] = mapped_column("createdAt", DateTime(timezone=True), server_default=func.now())
+    # Personal topics are created by students for their own study log.
+    # They are private (visible only to the creator) and trigger attendance auto-marking.
+    is_personal: Mapped[bool] = mapped_column("isPersonal", Boolean, default=False)
+    created_by: Mapped[str | None] = mapped_column("createdBy", String, nullable=True)
 
 
 class Material(Base):
@@ -85,6 +89,7 @@ class Material(Base):
         "fileType", SAEnum(MaterialType, name="MaterialType", create_type=False)
     )
     public_id: Mapped[str | None] = mapped_column("publicId", String, nullable=True)
+    week_number: Mapped[int | None] = mapped_column("weekNumber", Integer, nullable=True)
     uploaded_at: Mapped[datetime] = mapped_column("uploadedAt", DateTime(timezone=True), server_default=func.now())
     has_embeddings: Mapped[bool] = mapped_column("hasEmbeddings", Boolean, default=False)
     ingest_status: Mapped[IngestStatus] = mapped_column(
@@ -113,6 +118,9 @@ class TopicProgress(Base):
 
 class AttendanceRecord(Base):
     __tablename__ = "AttendanceRecord"
+    __table_args__ = (
+        UniqueConstraint("userId", "slotId", "date", name="uq_attendance_user_slot_date"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
     user_id: Mapped[str] = mapped_column("userId", String, ForeignKey("User.id", ondelete="CASCADE"))

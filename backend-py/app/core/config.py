@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     RAG_CHUNK_SIZE: int = 800
     RAG_CHUNK_OVERLAP: int = 150
 
+    # RAG material indexing: false = background task in the API process (default; no ARQ ingest worker needed).
+    # true = enqueue to Redis (requires a running `arq app.workers.ingest_worker.WorkerSettings` process).
+    INGEST_USE_ARQ_QUEUE: bool = False
+
     LLM_LOG_SAMPLING_RATE: float = 1.0
 
     PORT: int = 3002

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.core.deps import CurrentUserIdDep, DBDep, get_current_user_id
+from app.core.deps import CurrentUserDep, DBDep, get_current_user_id
 from app.core.exceptions import NotFoundError
+from app.core.permissions import ensure_course_member_or_admin
 from app.core.response import success
 from app.models.course import Material, Topic
 
@@ -11,12 +12,14 @@ router = APIRouter(dependencies=[Depends(get_current_user_id)])
 
 
 @router.get("/{material_id}")
-async def get_material(material_id: str, db: DBDep, user_id: CurrentUserIdDep):
+async def get_material(material_id: str, db: DBDep, current_user: CurrentUserDep):
     material = await db.get(Material, material_id)
     if not material:
         raise NotFoundError("Material not found")
 
     topic = await db.get(Topic, material.topic_id) if material.topic_id else None
+    if topic:
+        await ensure_course_member_or_admin(db, current_user, topic.course_id)
 
     return success({
         "id": material.id,

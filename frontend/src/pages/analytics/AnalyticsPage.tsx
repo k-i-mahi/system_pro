@@ -11,11 +11,12 @@ import {
 } from 'recharts';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth.store';
+import { isTutor as checkIsTutor } from '@/lib/rbac';
 
 export default function AnalyticsPage() {
   const [selectedCourseId, setSelectedCourseId] = useState('');
   const user = useAuthStore((s) => s.user);
-  const isTutor = user?.role === 'TUTOR';
+  const isTutor = checkIsTutor(user);
 
   const { data: overview } = useQuery({
     queryKey: ['analytics-overview'],

@@ -57,8 +57,8 @@ class RegisterRequest(BaseModel):
     @field_validator("role")
     @classmethod
     def role_allowed(cls, v: Role) -> Role:
-        if v not in (Role.STUDENT, Role.TUTOR, Role.ADMIN):
-            raise ValueError("Role must be STUDENT, TUTOR, or ADMIN")
+        if v not in (Role.STUDENT, Role.TUTOR):
+            raise ValueError("Registration is only available for STUDENT and TUTOR roles")
         return v
 
     @model_validator(mode="after")

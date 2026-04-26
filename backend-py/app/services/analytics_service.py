@@ -132,10 +132,34 @@ async def _overview_student(db: AsyncSession, user_id: str) -> dict:
 # ── Course analytics ──────────────────────────────────────────────────────────
 
 async def get_course_analytics(db: AsyncSession, user_id: str, course_id: str) -> dict:
+    from app.core.exceptions import NotFoundError
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     course = (await db.execute(select(Course).where(Course.id == course_id))).scalar_one_or_none()
+    if not course:
+        raise NotFoundError("Course not found")
 
     if user and user.role == Role.TUTOR:
+        # Tutors may only view analytics for their own taught courses.
+        owns = (await db.execute(
+            select(Community.id).where(
+                Community.course_id == course_id,
+                Community.created_by == user_id,
+            )
+        )).scalar_one_or_none()
+        if not owns:
+            from app.models.community import CommunityMember
+            from app.models.enums import CommunityRole
+            member_row = (await db.execute(
+                select(CommunityMember.id)
+                .join(Community, Community.id == CommunityMember.community_id)
+                .where(
+                    Community.course_id == course_id,
+                    CommunityMember.user_id == user_id,
+                    CommunityMember.role == CommunityRole.TUTOR,
+                )
+            )).scalar_one_or_none()
+            if not member_row:
+                raise NotFoundError("Course not found")
         return await _course_analytics_tutor(db, course_id, course)
     return await _course_analytics_student(db, user_id, course_id, course)
 
@@ -240,7 +264,12 @@ async def _course_analytics_student(db: AsyncSession, user_id: str, course_id: s
         })
 
     attendance_data = [
-        {"date": a.date, "present": a.present, "slotType": slot.type, "dayOfWeek": slot.day_of_week}
+        {
+            "date": a.date.isoformat() if hasattr(a.date, "isoformat") else str(a.date),
+            "present": a.present,
+            "slotType": slot.type.value if hasattr(slot.type, "value") else str(slot.type),
+            "dayOfWeek": slot.day_of_week.value if hasattr(slot.day_of_week, "value") else str(slot.day_of_week),
+        }
         for a, slot in attendance_rows
     ]
     present_count = sum(1 for a, _ in attendance_rows if a.present)

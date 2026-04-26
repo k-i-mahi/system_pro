@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import jwt
 import redis.asyncio as aioredis
@@ -68,13 +68,30 @@ async def get_current_user_id(
 CurrentUserIdDep = Annotated[str, Depends(get_current_user_id)]
 
 
+async def get_current_user(
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the full User ORM object. 401 if the account has been deleted."""
+    from app.models.user import User
+    user = await db.get(User, user_id)
+    if not user:
+        raise UnauthorizedError("User account not found or has been deleted")
+    return user
+
+
+if TYPE_CHECKING:
+    from app.models.user import User as _User
+CurrentUserDep = Annotated["_User", Depends(get_current_user)]
+
+
 def require_role(*roles: Role):
     """Returns a FastAPI dependency that enforces RBAC."""
     async def _check(
         user_id: str = Depends(get_current_user_id),
         db: AsyncSession = Depends(get_db),
     ) -> str:
-        from sqlalchemy import select, text
+        from sqlalchemy import select
         from app.models.user import User
 
         result = await db.execute(select(User.role).where(User.id == user_id))

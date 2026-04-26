@@ -12,6 +12,7 @@ from app.models.misc import Notification
 from app.models.enums import CommunityRole, DayOfWeek, SlotType
 from app.models.misc import RoutineScan
 from app.schemas.routine import BulkCreateCoursesRequest, MoveSlotRequest, UpdateSlotRequest
+from app.services.course_identity import find_course_by_code, normalize_course_code
 from app.services import cloudinary_service
 from app.services.ocr_service import extract_text_from_file
 
@@ -183,13 +184,15 @@ async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCo
     proposed_slots: list[dict] = []
     results = []
     for course_data in body.courses:
+        requested_course_code = normalize_course_code(course_data.courseCode)
+
         for slot in course_data.slots:
             if not _time_overlaps(slot.startTime, slot.endTime, slot.startTime, slot.endTime):
                 raise ValidationError(
                     "Schedule conflict: check routine properly and enter a free valid slot.",
                     details=[
                         {
-                            "courseCode": course_data.courseCode,
+                            "courseCode": requested_course_code,
                             "dayOfWeek": slot.dayOfWeek,
                             "startTime": slot.startTime,
                             "endTime": slot.endTime,
@@ -220,7 +223,7 @@ async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCo
                     "Schedule conflict: check routine properly and enter a free valid slot.",
                     details=[
                         {
-                            "courseCode": course_data.courseCode,
+                            "courseCode": requested_course_code,
                             "dayOfWeek": slot.dayOfWeek,
                             "startTime": slot.startTime,
                             "endTime": slot.endTime,
@@ -230,13 +233,10 @@ async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCo
                 )
 
         # Find or create course — always sync the course name to the submitted value.
-        result = await db.execute(
-            select(Course).where(Course.course_code == course_data.courseCode)
-        )
-        course = result.scalar_one_or_none()
+        course = await find_course_by_code(db, requested_course_code)
         if not course:
             course = Course(
-                course_code=course_data.courseCode,
+                course_code=requested_course_code,
                 course_name=course_data.courseName,
             )
             db.add(course)
@@ -281,7 +281,7 @@ async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCo
                     "dayOfWeek": slot.dayOfWeek,
                     "startTime": slot.startTime,
                     "endTime": slot.endTime,
-                    "courseCode": course_data.courseCode,
+                    "courseCode": course.course_code,
                 }
             )
 

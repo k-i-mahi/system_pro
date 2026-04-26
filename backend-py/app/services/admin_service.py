@@ -3,11 +3,13 @@ from __future__ import annotations
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.security import hash_password
-from app.models.community import Community
+from app.models.community import Community, CommunityMember
 from app.models.course import Course
+from app.models.enums import CommunityRole, Role
 from app.models.user import User
+from app.services.course_identity import find_course_by_code, normalize_course_code
 
 
 def _user_to_dict(u: User) -> dict:
@@ -74,7 +76,11 @@ async def create_user(db: AsyncSession, data: dict) -> dict:
     return _user_to_dict(user)
 
 
-async def update_user(db: AsyncSession, user_id: str, data: dict) -> dict:
+async def _count_admins(db: AsyncSession) -> int:
+    return (await db.execute(select(func.count()).where(User.role == Role.ADMIN))).scalar_one()
+
+
+async def update_user(db: AsyncSession, user_id: str, data: dict, acting_user_id: str | None = None) -> dict:
     user = await db.get(User, user_id)
     if not user:
         raise NotFoundError("User not found")
@@ -82,6 +88,14 @@ async def update_user(db: AsyncSession, user_id: str, data: dict) -> dict:
         existing = (await db.execute(select(User.id).where(User.email == data["email"]))).scalar_one_or_none()
         if existing:
             raise ConflictError("Email is already in use")
+
+    new_role = data.get("role")
+    if new_role and user.role == Role.ADMIN and new_role != Role.ADMIN:
+        admin_count = await _count_admins(db)
+        if admin_count <= 1:
+            raise ValidationError("Cannot demote the last admin account")
+        if acting_user_id and acting_user_id == user_id:
+            raise ValidationError("Admins cannot demote themselves")
 
     field_map = {
         "name": "name",
@@ -104,6 +118,10 @@ async def delete_user(db: AsyncSession, user_id: str, reason: str | None = None)
     user = await db.get(User, user_id)
     if not user:
         raise NotFoundError("User not found")
+    if user.role == Role.ADMIN:
+        admin_count = await _count_admins(db)
+        if admin_count <= 1:
+            raise ValidationError("Cannot delete the last admin account")
     name = user.name
     email = user.email
     await db.delete(user)
@@ -132,22 +150,36 @@ async def list_communities(db: AsyncSession, page: int, limit: int, search: str 
 
 
 async def create_community(db: AsyncSession, admin_user_id: str, data: dict) -> dict:
-    course = (await db.execute(select(Course).where(Course.course_code == data["courseCode"]))).scalar_one_or_none()
+    requested_course_code = normalize_course_code(data["courseCode"])
+    course = await find_course_by_code(db, requested_course_code)
     if not course:
-        course = Course(course_code=data["courseCode"], course_name=data["courseCode"])
+        course = Course(course_code=requested_course_code, course_name=requested_course_code)
         db.add(course)
         await db.flush()
     community = Community(
         name=data["name"],
         description=data.get("description"),
         course_id=course.id,
-        course_code=data["courseCode"],
+        course_code=course.course_code,
         session=data["session"],
         department=data["department"],
         university=data["university"],
         created_by=admin_user_id,
     )
     db.add(community)
+    await db.flush()
+
+    owner_user_id: str | None = data.get("ownerUserId")
+    if owner_user_id:
+        owner = await db.get(User, owner_user_id)
+        if not owner or owner.role != Role.TUTOR:
+            raise ValidationError("ownerUserId must reference an existing TUTOR account")
+        db.add(CommunityMember(
+            community_id=community.id,
+            user_id=owner_user_id,
+            role=CommunityRole.TUTOR,
+        ))
+
     await db.commit()
     await db.refresh(community)
     return _community_to_dict(community, course)
@@ -158,9 +190,10 @@ async def update_community(db: AsyncSession, community_id: str, data: dict) -> d
     if not community:
         raise NotFoundError("Community not found")
     if "courseCode" in data and data["courseCode"]:
-        course = (await db.execute(select(Course).where(Course.course_code == data["courseCode"]))).scalar_one_or_none()
+        requested_course_code = normalize_course_code(data["courseCode"])
+        course = await find_course_by_code(db, requested_course_code)
         if not course:
-            course = Course(course_code=data["courseCode"], course_name=data["courseCode"])
+            course = Course(course_code=requested_course_code, course_name=requested_course_code)
             db.add(course)
             await db.flush()
         community.course_id = course.id
@@ -178,6 +211,27 @@ async def update_community(db: AsyncSession, community_id: str, data: dict) -> d
     await db.refresh(community)
     course = await db.get(Course, community.course_id)
     return _community_to_dict(community, course)
+
+
+async def get_platform_stats(db: AsyncSession) -> dict:
+    from sqlalchemy import func, select
+    role_counts_raw = (await db.execute(
+        select(User.role, func.count()).group_by(User.role)
+    )).all()
+    community_count = await db.scalar(select(func.count()).select_from(Community))
+    recent_raw = (await db.execute(
+        select(User.name, User.email, User.role, User.created_at)
+        .order_by(User.created_at.desc())
+        .limit(10)
+    )).all()
+    return {
+        "roleCounts": {str(r): c for r, c in role_counts_raw},
+        "totalCommunities": community_count,
+        "recentRegistrations": [
+            {"name": u.name, "email": u.email, "role": u.role, "joinedAt": u.created_at.isoformat()}
+            for u in recent_raw
+        ],
+    }
 
 
 async def delete_community(db: AsyncSession, community_id: str) -> dict:

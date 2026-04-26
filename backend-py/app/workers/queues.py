@@ -9,12 +9,15 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# ARQ queue name for ingest jobs (Python workers — separate from BullMQ)
+# ARQ queue names
 _INGEST_QUEUE = "ingest"
+_NOTIF_QUEUE = "notifications"
 
 
 def _redis_settings() -> RedisSettings:
-    return RedisSettings.from_dsn(settings.REDIS_URL)
+    # Prefer ARQ_REDIS_URL for dedicated ARQ connection, fall back to REDIS_URL.
+    url = getattr(settings, "ARQ_REDIS_URL", None) or settings.REDIS_URL
+    return RedisSettings.from_dsn(url)
 
 
 async def enqueue_ingest(material_id: str, user_id: str, quality: str = "fast") -> None:
@@ -29,5 +32,15 @@ async def enqueue_ingest(material_id: str, user_id: str, quality: str = "fast") 
             _queue_name=_INGEST_QUEUE,
         )
         logger.info("Enqueued ingest job for material %s", material_id)
+    finally:
+        await redis.aclose()
+
+
+async def enqueue_notification_scan() -> None:
+    """Manually trigger a notification scan job."""
+    redis = await create_pool(_redis_settings())
+    try:
+        await redis.enqueue_job("scan_schedule_reminders", _queue_name=_NOTIF_QUEUE)
+        logger.info("Enqueued notification scan job")
     finally:
         await redis.aclose()

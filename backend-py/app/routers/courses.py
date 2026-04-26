@@ -4,14 +4,16 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.core import response as resp
-from app.core.deps import CurrentUserIdDep, DBDep, get_current_user_id
+from app.core.deps import CurrentUserIdDep, DBDep, get_current_user_id, require_role
 from app.core.exceptions import ValidationError
 from app.core.rate_limit import limiter
+from app.models.enums import Role
 from app.schemas.courses import (
     AddMaterialLinkRequest,
     CoursesQuery,
     CreateTopicRequest,
     ReorderTopicsRequest,
+    UpdateMaterialRequest,
     UpdateTopicRequest,
 )
 from app.services import courses_service
@@ -29,6 +31,7 @@ _ACCEPTED_MATERIAL_CONTENT_TYPES = {
 }
 _ACCEPTED_MATERIAL_EXTENSIONS = {".pdf", ".docx", ".jpg", ".jpeg", ".png", ".webp", ".txt"}
 _MAX_MATERIAL_BYTES = 25 * 1024 * 1024
+_SUPPORTED_MATERIAL_FORMATS_LABEL = "PDF, DOCX, JPG, JPEG, PNG, WEBP, TXT"
 
 
 @router.get("")
@@ -46,8 +49,11 @@ async def my_courses(db: DBDep, user_id: CurrentUserIdDep) -> JSONResponse:
 # ── Topics — reorder MUST come before /{topic_id} to avoid path collision ────
 
 @router.put("/{course_id}/topics/reorder")
-async def reorder_topics(course_id: str, body: ReorderTopicsRequest, db: DBDep, user_id: CurrentUserIdDep) -> JSONResponse:
-    await courses_service.reorder_topics(db, course_id, body)
+async def reorder_topics(
+    course_id: str, body: ReorderTopicsRequest, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.TUTOR, Role.ADMIN),
+) -> JSONResponse:
+    await courses_service.reorder_topics(db, course_id, body, user_id)
     return resp.success({"message": "Topics reordered"})
 
 
@@ -58,20 +64,31 @@ async def get_course_detail(course_id: str, db: DBDep, user_id: CurrentUserIdDep
 
 
 @router.post("/{course_id}/topics")
-async def create_topic(course_id: str, body: CreateTopicRequest, db: DBDep, user_id: CurrentUserIdDep) -> JSONResponse:
-    topic = await courses_service.create_topic(db, course_id, body)
+async def create_topic(
+    course_id: str, body: CreateTopicRequest, db: DBDep, user_id: CurrentUserIdDep,
+) -> JSONResponse:
+    # Role-based logic is handled in the service:
+    # - STUDENT  → personal study-log topic + auto-mark attendance
+    # - TUTOR/ADMIN → shared course topic (requires course-manager permission)
+    topic = await courses_service.create_topic(db, course_id, body, user_id)
     return resp.created(topic)
 
 
 @router.put("/{course_id}/topics/{topic_id}")
-async def update_topic(course_id: str, topic_id: str, body: UpdateTopicRequest, db: DBDep, user_id: CurrentUserIdDep) -> JSONResponse:
-    topic = await courses_service.update_topic(db, topic_id, body)
+async def update_topic(
+    course_id: str, topic_id: str, body: UpdateTopicRequest, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.TUTOR, Role.ADMIN),
+) -> JSONResponse:
+    topic = await courses_service.update_topic(db, course_id, topic_id, body, user_id)
     return resp.success(topic)
 
 
 @router.delete("/{course_id}/topics/{topic_id}")
-async def delete_topic(course_id: str, topic_id: str, db: DBDep, user_id: CurrentUserIdDep) -> JSONResponse:
-    await courses_service.delete_topic(db, topic_id)
+async def delete_topic(
+    course_id: str, topic_id: str, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.TUTOR, Role.ADMIN),
+) -> JSONResponse:
+    await courses_service.delete_topic_for_course(db, course_id, topic_id, user_id)
     return resp.success({"message": "Topic deleted"})
 
 
@@ -89,12 +106,13 @@ async def upload_material(
     title: str | None = Form(default=None),
     fileType: str | None = Form(default=None),
     quality: str | None = Form(default=None),
+    _role: str = require_role(Role.TUTOR, Role.ADMIN),
 ) -> JSONResponse:
     file_ext = Path(file.filename or "").suffix.lower()
     content_type_ok = file.content_type in _ACCEPTED_MATERIAL_CONTENT_TYPES
     extension_ok = file_ext in _ACCEPTED_MATERIAL_EXTENSIONS
     if not content_type_ok and not extension_ok:
-        raise ValidationError("Unsupported material file type. Upload PDF, DOCX, image, or TXT file.")
+        raise ValidationError(f"Unsupported material file type. Supported formats: {_SUPPORTED_MATERIAL_FORMATS_LABEL}.")
 
     file_bytes = await file.read()
     if not file_bytes:
@@ -111,20 +129,45 @@ async def upload_material(
 
 
 @router.post("/{course_id}/topics/{topic_id}/materials/link")
-async def add_material_link(course_id: str, topic_id: str, body: AddMaterialLinkRequest, db: DBDep, user_id: CurrentUserIdDep) -> JSONResponse:
-    material = await courses_service.add_material_link(db, topic_id, body)
+async def add_material_link(
+    course_id: str, topic_id: str, body: AddMaterialLinkRequest, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.TUTOR, Role.ADMIN),
+) -> JSONResponse:
+    material = await courses_service.add_material_link(db, course_id, topic_id, body, user_id)
     return resp.created(material)
 
 
 @router.delete("/{course_id}/topics/{topic_id}/materials/{material_id}")
-async def delete_material(course_id: str, topic_id: str, material_id: str, db: DBDep, user_id: CurrentUserIdDep) -> JSONResponse:
-    await courses_service.delete_material(db, material_id)
+async def delete_material(
+    course_id: str, topic_id: str, material_id: str, db: DBDep, user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.TUTOR, Role.ADMIN),
+) -> JSONResponse:
+    await courses_service.delete_material_for_course(db, course_id, topic_id, material_id, user_id)
     return resp.success({"message": "Material deleted"})
+
+
+@router.patch("/{course_id}/topics/{topic_id}/materials/{material_id}")
+async def update_material(
+    course_id: str,
+    topic_id: str,
+    material_id: str,
+    body: UpdateMaterialRequest,
+    db: DBDep,
+    user_id: CurrentUserIdDep,
+    _role: str = require_role(Role.TUTOR, Role.ADMIN),
+) -> JSONResponse:
+    material = await courses_service.update_material(db, course_id, topic_id, material_id, body, user_id)
+    return resp.success(material)
 
 
 @router.post("/{course_id}/topics/{topic_id}/materials/{material_id}/reingest")
 async def reingest_material(
-    course_id: str, topic_id: str, material_id: str, db: DBDep, user_id: CurrentUserIdDep
+    course_id: str,
+    topic_id: str,
+    material_id: str,
+    db: DBDep,
+    user_id: CurrentUserIdDep,
 ) -> JSONResponse:
+    # RBAC: students + tutors + admins (matches AI Tutor audience) — see _require_reingest_access
     material = await courses_service.reingest_material(db, course_id, topic_id, material_id, user_id)
     return resp.success(material)

@@ -13,7 +13,7 @@ export default function RegisterPage() {
     email: '',
     password: '',
     universityName: '',
-    role: 'STUDENT' as 'STUDENT' | 'TUTOR' | 'ADMIN',
+    role: 'STUDENT' as 'STUDENT' | 'TUTOR',
   });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -115,11 +115,12 @@ export default function RegisterPage() {
                   <input type="radio" name="role" value="TUTOR" checked={form.role === 'TUTOR'} onChange={() => update('role', 'TUTOR')} className="hidden" />
                   Tutor
                 </label>
-                <label className={`flex-1 p-3 rounded-lg border-2 text-center cursor-pointer transition-colors ${form.role === 'ADMIN' ? 'border-primary bg-primary-light text-primary' : 'border-border text-text-secondary hover:bg-bg-main'}`}>
-                  <input type="radio" name="role" value="ADMIN" checked={form.role === 'ADMIN'} onChange={() => update('role', 'ADMIN')} className="hidden" />
-                  Admin
-                </label>
               </div>
+              {form.role === 'TUTOR' && (
+                <p className="mt-1 text-xs text-text-muted">
+                  Tutor email format: name@dept.kuet.ac.bd (e.g. teacher@cse.kuet.ac.bd)
+                </p>
+              )}
             </div>
             <div>
               <label className="label">University</label>

@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { MessageSquare, ThumbsUp, Plus, X, ChevronRight, School, Users } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { MessageSquare, ThumbsUp, Plus, X, ChevronRight, School, Users, GraduationCap } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth.store';
+import { isStudent as checkIsStudent, isTutor as checkIsTutor } from '@/lib/rbac';
 import toast from 'react-hot-toast';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -11,6 +12,8 @@ type MainTab = 'threads' | 'classrooms';
 
 export default function CommunityPage() {
   const queryClient = useQueryClient();
+  const user = useAuthStore((s) => s.user);
+  const isStudent = checkIsStudent(user);
   const [mainTab, setMainTab] = useState<MainTab>('classrooms');
   const [tab, setTab] = useState<'all' | 'my-courses'>('all');
   const [showNew, setShowNew] = useState(false);
@@ -18,15 +21,24 @@ export default function CommunityPage() {
   const [newThread, setNewThread] = useState({ title: '', body: '', tags: '' });
   const [replyContent, setReplyContent] = useState('');
 
+  // Threads are STUDENT-only (backend enforces Role.STUDENT).
+  useEffect(() => {
+    if (!isStudent) {
+      setMainTab('classrooms');
+      setSelectedThread(null);
+    }
+  }, [isStudent]);
+
   const { data: threads = [], isLoading } = useQuery({
     queryKey: ['threads', tab],
     queryFn: () => api.get('/community/threads', { params: { tab } }).then((r) => r.data.data),
+    enabled: isStudent,
   });
 
   const { data: threadDetail } = useQuery({
     queryKey: ['thread', selectedThread],
     queryFn: () => api.get(`/community/threads/${selectedThread}`).then((r) => r.data.data),
-    enabled: !!selectedThread,
+    enabled: !!selectedThread && isStudent,
   });
 
   const createMutation = useMutation({
@@ -65,91 +77,103 @@ export default function CommunityPage() {
     },
   });
 
-  if (selectedThread && threadDetail) {
+  if (isStudent && selectedThread && threadDetail) {
     return (
-      <div>
+      <div className="max-w-3xl">
         <button
           onClick={() => setSelectedThread(null)}
-          className="flex items-center gap-2 text-text-secondary hover:text-primary mb-4"
+          className="mb-4 flex items-center gap-2 text-sm text-text-secondary transition-colors hover:text-primary"
         >
           ← Back to threads
         </button>
 
-        <div className="card mb-4">
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-white text-sm font-medium shrink-0">
-              {threadDetail.creator?.name?.charAt(0) || '?'}
-            </div>
-            <div className="flex-1">
-              <h1 className="text-xl font-semibold">{threadDetail.title}</h1>
-              <p className="text-sm text-text-secondary mt-1">
-                {threadDetail.creator?.name} •{' '}
-                {formatDistanceToNow(new Date(threadDetail.createdAt), { addSuffix: true })}
-              </p>
-              {threadDetail.course && (
-                <span className="badge bg-primary-light text-primary mt-2">
-                  {threadDetail.course.courseCode}
-                </span>
-              )}
-              <p className="mt-3 whitespace-pre-wrap text-text-primary">{threadDetail.body}</p>
-              <div className="flex items-center gap-4 mt-3">
-                <button
-                  onClick={() => likeMutation.mutate(threadDetail.id)}
-                  className="flex items-center gap-1 text-sm text-text-secondary hover:text-primary"
-                >
-                  <ThumbsUp size={16} />
-                  {threadDetail._count?.likes || 0}
-                </button>
-                <span className="flex items-center gap-1 text-sm text-text-secondary">
-                  <MessageSquare size={16} />
-                  {threadDetail._count?.posts || 0} replies
-                </span>
+        <div className="overflow-hidden rounded-2xl border border-border/80 bg-bg-card shadow-sm">
+          <div className="border-b border-border/60 bg-linear-to-b from-primary/6 to-transparent px-5 py-5 sm:px-6">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-medium text-white shadow-sm">
+                {threadDetail.creator?.name?.charAt(0) || '?'}
+              </div>
+              <div className="min-w-0 flex-1">
+                <h1 className="text-lg font-semibold text-text-primary sm:text-xl">{threadDetail.title}</h1>
+                <p className="mt-1 text-sm text-text-secondary">
+                  {threadDetail.creator?.name} · {formatDistanceToNow(new Date(threadDetail.createdAt), { addSuffix: true })}
+                </p>
+                {threadDetail.course && (
+                  <span className="mt-2 inline-flex rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">
+                    {threadDetail.course.courseCode}
+                  </span>
+                )}
+                <p className="mt-4 whitespace-pre-wrap text-[15px] leading-relaxed text-text-primary">
+                  {threadDetail.body}
+                </p>
+                <div className="mt-4 flex flex-wrap items-center gap-4 text-sm text-text-secondary">
+                  <button
+                    type="button"
+                    onClick={() => likeMutation.mutate(threadDetail.id)}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-bg-main hover:text-primary"
+                  >
+                    <ThumbsUp size={16} />
+                    {threadDetail._count?.likes || 0}
+                  </button>
+                  <span className="inline-flex items-center gap-1.5">
+                    <MessageSquare size={16} />
+                    {threadDetail._count?.posts || 0} {threadDetail._count?.posts === 1 ? 'reply' : 'replies'}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Replies */}
-        <div className="space-y-3 mb-4">
-          {threadDetail.posts?.map((post: any) => (
-            <div key={post.id} className="card">
-              <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-bg-main flex items-center justify-center text-text-secondary text-sm font-medium">
-                  {post.author?.name?.charAt(0) || '?'}
-                </div>
-                <div>
-                  <p className="text-sm font-medium">
-                    {post.author?.name}{' '}
-                    <span className="text-text-muted font-normal">
-                      • {formatDistanceToNow(new Date(post.createdAt), { addSuffix: true })}
-                    </span>
-                  </p>
-                  <p className="text-text-primary mt-1">{post.content}</p>
-                </div>
+          <div className="bg-bg-main/30 px-3 py-4 sm:px-5">
+            <p className="mb-3 px-1 text-xs font-medium uppercase tracking-wide text-text-muted">Replies</p>
+            <ul className="space-y-0">
+              {threadDetail.posts?.map((post: any, i: number) => (
+                <li key={post.id} className="relative pl-1">
+                  {i < (threadDetail.posts?.length ?? 0) - 1 && (
+                    <div className="absolute left-4 top-10 h-[calc(100%-0.5rem)] w-px bg-border" aria-hidden />
+                  )}
+                  <div className="flex gap-3 rounded-xl py-2 pl-0 sm:gap-4">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border/80 bg-bg-card text-xs font-medium text-text-secondary">
+                      {post.author?.name?.charAt(0) || '?'}
+                    </div>
+                    <div className="min-w-0 flex-1 border-l-2 border-primary/20 pl-4">
+                      <p className="text-sm text-text-primary">
+                        <span className="font-medium text-text-primary">{post.author?.name}</span>
+                        <span className="text-text-muted"> · {formatDistanceToNow(new Date(post.createdAt), { addSuffix: true })}</span>
+                      </p>
+                      <p className="mt-1.5 text-sm leading-relaxed text-text-primary/95">{post.content}</p>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {(!threadDetail.posts || threadDetail.posts.length === 0) && (
+              <p className="px-1 py-2 text-sm text-text-muted">No replies yet. Be the first to respond below.</p>
+            )}
+          </div>
+
+          <div className="border-t border-border/60 bg-bg-card p-4 sm:p-5">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (replyContent.trim()) replyMutation.mutate(replyContent);
+              }}
+              className="space-y-3"
+            >
+              <label className="text-xs font-medium text-text-secondary">Add a reply</label>
+              <textarea
+                className="input min-h-[100px] resize-y py-2.5"
+                placeholder="Write your reply..."
+                value={replyContent}
+                onChange={(e) => setReplyContent(e.target.value)}
+              />
+              <div className="flex justify-end">
+                <button type="submit" className="btn-primary" disabled={!replyContent.trim() || replyMutation.isPending}>
+                  {replyMutation.isPending ? 'Posting...' : 'Post reply'}
+                </button>
               </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Reply input */}
-        <div className="card">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (replyContent.trim()) replyMutation.mutate(replyContent);
-            }}
-            className="space-y-3"
-          >
-            <textarea
-              className="input min-h-[90px] py-2"
-              placeholder="Write your reply..."
-              value={replyContent}
-              onChange={(e) => setReplyContent(e.target.value)}
-            />
-            <button type="submit" className="btn-primary" disabled={!replyContent.trim() || replyMutation.isPending}>
-              {replyMutation.isPending ? 'Posting...' : 'Reply'}
-            </button>
-          </form>
+            </form>
+          </div>
         </div>
       </div>
     );
@@ -172,7 +196,7 @@ export default function CommunityPage() {
         </div>
       </div>
 
-      {/* Main Tabs */}
+      {/* Main Tabs — "Threads" is for students only; tutors use Classrooms */}
       <div className="flex gap-2 mb-4 border-b border-border pb-3">
         <button
           onClick={() => setMainTab('classrooms')}
@@ -182,14 +206,16 @@ export default function CommunityPage() {
         >
           <School size={16} /> Classrooms
         </button>
-        <button
-          onClick={() => setMainTab('threads')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-            mainTab === 'threads' ? 'bg-primary text-white' : 'text-text-secondary hover:bg-bg-main'
-          }`}
-        >
-          <MessageSquare size={16} /> Threads
-        </button>
+        {isStudent && (
+          <button
+            onClick={() => setMainTab('threads')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              mainTab === 'threads' ? 'bg-primary text-white' : 'text-text-secondary hover:bg-bg-main'
+            }`}
+          >
+            <MessageSquare size={16} /> Threads
+          </button>
+        )}
       </div>
 
       {mainTab === 'classrooms' && <ClassroomsSection />}
@@ -308,9 +334,17 @@ function ClassroomsSection() {
   const queryClient = useQueryClient();
   const [classroomTab, setClassroomTab] = useState<'my' | 'eligible'>('my');
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ name: '', description: '', courseCode: '', session: '', department: '', university: '' });
+  const [form, setForm] = useState({
+    name: '',
+    description: '',
+    courseCode: '',
+    session: '',
+    department: '',
+    university: user?.universityName || '',
+  });
   const [joinTarget, setJoinTarget] = useState<string | null>(null);
   const [joinForm, setJoinForm] = useState({ rollNumber: '', session: '', department: '' });
+  const isStudent = checkIsStudent(user);
 
   const { data: communities = [], isLoading } = useQuery({
     queryKey: ['communities', classroomTab],
@@ -321,8 +355,16 @@ function ClassroomsSection() {
     mutationFn: () => api.post('/community', form),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['communities'] });
+      queryClient.invalidateQueries({ queryKey: ['my-courses'] });
       setShowCreate(false);
-      setForm({ name: '', description: '', courseCode: '', session: '', department: '', university: '' });
+      setForm({
+        name: '',
+        description: '',
+        courseCode: '',
+        session: '',
+        department: '',
+        university: user?.universityName || '',
+      });
       toast.success('Classroom created');
       navigate(`/community/${res.data.data.id}`);
     },
@@ -342,11 +384,69 @@ function ClassroomsSection() {
       toast.error(err.response?.data?.error?.message || 'Failed to join — details do not match'),
   });
 
-  const isTutor = user?.role === 'TUTOR' || user?.role === 'ADMIN';
+  const isTutor = checkIsTutor(user);
+
+  const { data: gcStatus } = useQuery<{ connected: boolean }>({
+    queryKey: ['google-classroom-status'],
+    queryFn: () => api.get('/google-classroom/status').then((r) => r.data.data),
+    retry: false,
+    enabled: isStudent,
+  });
+  const gcConnected = gcStatus?.connected ?? false;
+
+  useEffect(() => {
+    if (!isTutor || !user?.universityName) return;
+    setForm((previous) =>
+      previous.university
+        ? previous
+        : { ...previous, university: user.universityName ?? '' }
+    );
+  }, [isTutor, user?.universityName]);
 
   return (
     <div>
+      {/* Google Classroom connection banner */}
+      {isStudent && !gcConnected && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <GraduationCap size={18} className="shrink-0 text-amber-600" />
+          <span className="flex-1">Connect Google Classroom with the same student email you used here to import assignments into your routine.</span>
+          <Link
+            to="/settings?tab=integrations"
+            className="rounded-md bg-amber-600 px-3 py-1 text-white text-xs font-medium hover:bg-amber-700 transition-colors"
+          >
+            Connect
+          </Link>
+        </div>
+      )}
+
       {/* Sub-tabs */}
+      {isTutor && (
+        <div className="card mb-4 border border-primary/10 bg-primary-light/30">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-text-primary">Tutor workflow</h3>
+              <p className="mt-1 text-sm text-text-secondary">
+                Create one classroom per course section, using the same course code students already have in their routine or course list.
+              </p>
+            </div>
+            <div className="grid gap-2 text-sm text-text-secondary sm:grid-cols-3">
+              <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
+                <p className="font-medium text-text-primary">1. Match course code</p>
+                <p className="mt-1 text-xs">Matching codes connect this classroom to the shared course page.</p>
+              </div>
+              <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
+                <p className="font-medium text-text-primary">2. Students join once</p>
+                <p className="mt-1 text-xs">Their roll, department, and session identify them for marks.</p>
+              </div>
+              <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
+                <p className="font-medium text-text-primary">3. Update once</p>
+                <p className="mt-1 text-xs">Marks, announcements, and materials reflect to students automatically.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex gap-2 mb-4">
         <button
           onClick={() => setClassroomTab('my')}
@@ -366,9 +466,17 @@ function ClassroomsSection() {
       {isTutor && showCreate && (
         <div className="card mb-4">
           <h3 className="font-semibold mb-3">Create Classroom</h3>
+          <p className="mb-3 text-sm text-text-secondary">
+            Use the exact course code students know for this course. That is what links your classroom updates to their course page.
+          </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <input className="input" placeholder="Classroom name" value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
-            <input className="input" placeholder="Course code" value={form.courseCode} onChange={(e) => setForm((p) => ({ ...p, courseCode: e.target.value }))} />
+            <input
+              className="input"
+              placeholder="Course code"
+              value={form.courseCode}
+              onChange={(e) => setForm((p) => ({ ...p, courseCode: e.target.value.toUpperCase() }))}
+            />
             <input className="input" placeholder="Session (e.g. 2024-25)" value={form.session} onChange={(e) => setForm((p) => ({ ...p, session: e.target.value }))} />
             <input className="input" placeholder="Department" value={form.department} onChange={(e) => setForm((p) => ({ ...p, department: e.target.value }))} />
             <input className="input" placeholder="University" value={form.university} onChange={(e) => setForm((p) => ({ ...p, university: e.target.value }))} />
@@ -392,9 +500,26 @@ function ClassroomsSection() {
       {isLoading ? (
         <div className="text-center py-8 text-text-muted">Loading...</div>
       ) : communities.length === 0 ? (
-        <div className="card text-center py-8">
-          <School size={40} className="mx-auto text-text-muted mb-2" />
-          <p className="text-text-secondary">{classroomTab === 'my' ? 'You haven\'t joined any classrooms yet' : 'No available classrooms'}</p>
+        <div className="card text-center py-10 max-w-lg mx-auto">
+          <School size={40} className="mx-auto text-text-muted mb-3" />
+          <p className="font-medium text-text-primary">
+            {classroomTab === 'my' ? "You haven't joined any classrooms yet" : 'No classrooms listed as available'}
+          </p>
+          <p className="mt-3 text-sm text-text-secondary leading-relaxed">
+            {classroomTab === 'my' ? (
+              isStudent ? (
+                <>
+                  Classrooms are <strong className="font-medium text-text-primary">not created automatically</strong> for
+                  each course. Your instructor creates one and ties it to the course code; you join from{' '}
+                  <span className="font-medium">Available</span> using the roll, session, and department on record.
+                </>
+              ) : (
+                'Create a classroom and match the course code to your students’ course list so it links to their workspace.'
+              )
+            ) : (
+              'No classrooms match your profile for self-service join yet, or your instructor has not published one.'
+            )}
+          </p>
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2">

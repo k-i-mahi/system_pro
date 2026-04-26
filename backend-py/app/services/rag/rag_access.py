@@ -6,8 +6,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.models.community import Community, CommunityMember
 from app.models.course import Course, Enrollment, Material, Topic
-from app.models.enums import IngestStatus, MaterialType, Role
+from app.models.enums import CommunityRole, IngestStatus, MaterialType, Role
 from app.models.user import User
 from app.services.rag.retriever import RetrievalScope
 
@@ -34,10 +35,40 @@ async def _ensure_enrolled(db: AsyncSession, user_id: str, course_id: str) -> No
         raise ForbiddenError("You are not enrolled in this course")
 
 
+async def _ensure_tutor_teaches_course(db: AsyncSession, user_id: str, course_id: str) -> None:
+    """Tutors may only RAG courses they teach (own community or are TUTOR member)."""
+    row = (
+        await db.execute(
+            select(Community.id).where(
+                Community.course_id == course_id,
+                Community.created_by == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row:
+        return
+    row2 = (
+        await db.execute(
+            select(CommunityMember.id)
+            .join(Community, Community.id == CommunityMember.community_id)
+            .where(
+                Community.course_id == course_id,
+                CommunityMember.user_id == user_id,
+                CommunityMember.role == CommunityRole.TUTOR,
+            )
+        )
+    ).scalar_one_or_none()
+    if not row2:
+        raise ForbiddenError("You are not a tutor for this course")
+
+
 async def ensure_user_can_rag_course(db: AsyncSession, user_id: str, course_id: str) -> None:
     await _ensure_course_exists(db, course_id)
     role = await _get_user_role(db, user_id)
-    if role in (Role.TUTOR, Role.ADMIN, Role.MENTOR):
+    if role == Role.ADMIN:
+        return
+    if role == Role.TUTOR:
+        await _ensure_tutor_teaches_course(db, user_id, course_id)
         return
     await _ensure_enrolled(db, user_id, course_id)
 

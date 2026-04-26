@@ -40,9 +40,9 @@ async def update_user(
     user_id: str,
     body: AdminUpdateUserRequest,
     db: DBDep,
-    _admin_id: str = require_role(Role.ADMIN),
+    admin_id: str = require_role(Role.ADMIN),
 ):
-    data = await admin_service.update_user(db, user_id, body.model_dump(exclude_unset=True))
+    data = await admin_service.update_user(db, user_id, body.model_dump(exclude_unset=True), acting_user_id=admin_id)
     return success(data)
 
 
@@ -93,4 +93,10 @@ async def update_community(
 @router.delete("/communities/{community_id}")
 async def delete_community(community_id: str, db: DBDep, _admin_id: str = require_role(Role.ADMIN)):
     data = await admin_service.delete_community(db, community_id)
+    return success(data)
+
+
+@router.get("/stats")
+async def get_platform_stats(db: DBDep, _admin_id: str = require_role(Role.ADMIN)):
+    data = await admin_service.get_platform_stats(db)
     return success(data)

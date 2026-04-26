@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Bell, CheckCheck, Trash2, Info, BookOpen, MessageSquare, Clock, FlaskConical, FileText, Lightbulb, Upload, Megaphone, ClipboardCheck } from 'lucide-react';
+import { Bell, CheckCheck, Trash2, Info, BookOpen, MessageSquare, Clock, FlaskConical, FileText, Lightbulb, Upload, Megaphone, ClipboardCheck, CheckCircle, XCircle } from 'lucide-react';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import { formatDistanceToNow } from 'date-fns';
@@ -35,15 +35,20 @@ export default function NotificationsPage() {
     queryFn: () => api.get('/notifications').then((r) => r.data.data),
   });
 
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] });
+  };
+
   const markReadMutation = useMutation({
     mutationFn: (id: string) => api.patch(`/notifications/${id}/read`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+    onSuccess: invalidateAll,
   });
 
   const markAllMutation = useMutation({
     mutationFn: () => api.patch('/notifications/read-all'),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      invalidateAll();
       toast.success('All marked as read');
     },
   });
@@ -51,7 +56,7 @@ export default function NotificationsPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/notifications/${id}`),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      invalidateAll();
       toast.success('Notification deleted');
     },
   });
@@ -59,17 +64,21 @@ export default function NotificationsPage() {
   const classResponseMutation = useMutation({
     mutationFn: (payload: {
       notificationId: string;
-      topicCovered: string;
-      materialNeeded: boolean;
+      action: 'attended' | 'missed';
+      topicCovered?: string;
+      materialNeeded?: boolean;
       materialRequest?: string;
       notes?: string;
     }) => api.post('/notifications/class-response', payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notifications'] });
-      queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] });
+    onSuccess: (_data, variables) => {
+      invalidateAll();
       setActiveResponseId(null);
       setResponseForm({ topicCovered: '', materialNeeded: false, materialRequest: '', notes: '' });
-      toast.success('Response submitted and attendance recorded');
+      toast.success(
+        variables.action === 'missed'
+          ? 'Marked as missed class'
+          : 'Response submitted and attendance recorded'
+      );
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.error?.message || 'Failed to submit class response');
@@ -103,9 +112,16 @@ export default function NotificationsPage() {
       {isLoading ? (
         <div className="text-center py-12 text-text-muted">Loading...</div>
       ) : notifications.length === 0 ? (
-        <div className="card text-center py-12">
-          <Bell size={48} className="mx-auto text-text-muted mb-3" />
-          <p className="text-text-secondary">No notifications yet</p>
+        <div className="card mx-auto max-w-md py-12 text-center">
+          <Bell size={48} className="mx-auto mb-3 text-text-muted" />
+          <p className="text-text-primary font-medium">No notifications yet</p>
+          <p className="mt-3 text-sm leading-relaxed text-text-secondary">
+            When you open this page, we sync class and lab reminders for today from your schedule. You will also see
+            prompts after class, material updates from instructors, and community announcements.
+          </p>
+          <p className="mt-2 text-xs text-text-muted">
+            If today has no classes in your routine, the list can stay empty until one is scheduled.
+          </p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -113,6 +129,8 @@ export default function NotificationsPage() {
             const Icon = ICON_MAP[notif.type] || Info;
             const isAttendancePrompt = Boolean(notif.metadata?.attendancePrompt);
             const hasClassResponse = Boolean(notif.metadata?.classResponse);
+            const isMissedClass = Boolean(notif.metadata?.missedClass);
+            const isFollowup = Boolean(notif.metadata?.isFollowup);
             const formOpen = activeResponseId === notif.id;
             return (
               <div
@@ -134,50 +152,98 @@ export default function NotificationsPage() {
                   <p className="text-xs text-text-muted mt-1">
                     {formatDistanceToNow(new Date(notif.createdAt), { addSuffix: true })}
                   </p>
-                  {(notif.metadata?.deepLink || notif.metadata?.communityId) && (
+                  {(notif.metadata?.deepLink || notif.metadata?.communityId) && !notif.metadata?.attendancePrompt && (
                     <div className="mt-2">
                       <Link
                         to={notif.metadata?.deepLink || `/community/${notif.metadata.communityId}`}
                         className="text-xs text-primary hover:underline"
                       >
-                        Open recommendation
+                        {notif.metadata?.kind === 'COURSE_MARKS_UPLOADED'
+                          ? 'View my marks'
+                          : notif.metadata?.kind === 'COURSE_MATERIAL_UPLOADED'
+                            ? 'Open course materials'
+                            : notif.metadata?.kind === 'CLASSROOM_ANNOUNCEMENT'
+                              ? 'Open classroom'
+                              : notif.type === 'MATERIAL_UPLOAD_PROMPT'
+                                ? 'Go to community'
+                                : notif.metadata?.communityId
+                                  ? 'Open classroom'
+                                  : 'Open'}
                       </Link>
                     </div>
                   )}
                   {isAttendancePrompt && (
                     <div className="mt-3 rounded-md border border-border bg-bg-main p-3">
-                      {hasClassResponse ? (
+                      {/* Already resolved states */}
+                      {isMissedClass ? (
+                        <p className="text-xs text-text-muted flex items-center gap-1">
+                          <XCircle size={12} className="text-red-400" /> Marked as missed class
+                        </p>
+                      ) : hasClassResponse ? (
                         <div>
-                          <p className="text-xs font-semibold text-primary">Response submitted</p>
-                          <p className="text-xs text-text-secondary mt-1">
-                            Topic: {notif.metadata.classResponse.topicCovered}
+                          <p className="text-xs font-semibold text-primary flex items-center gap-1">
+                            <CheckCircle size={12} /> Attended — response submitted
                           </p>
+                          {notif.metadata.classResponse?.topicCovered && (
+                            <p className="text-xs text-text-secondary mt-1">
+                              Topic: {notif.metadata.classResponse.topicCovered}
+                            </p>
+                          )}
                         </div>
                       ) : (
+                        /* Unresolved — show CTA */
                         <>
-                          <p className="text-xs text-text-secondary mb-2">
-                            Submit attendance response for today&apos;s class.
-                          </p>
+                          {isFollowup && (
+                            <p className="text-xs text-amber-600 font-medium mb-2">
+                              Follow-up reminder — still waiting for your response.
+                            </p>
+                          )}
                           {!formOpen ? (
-                            <button
-                              className="btn-secondary text-xs"
-                              onClick={() => {
-                                setActiveResponseId(notif.id);
-                                setResponseForm({
-                                  topicCovered: '',
-                                  materialNeeded: false,
-                                  materialRequest: '',
-                                  notes: '',
-                                });
-                              }}
-                            >
-                              Submit class response
-                            </button>
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                className="btn-secondary text-xs"
+                                onClick={() => {
+                                  setActiveResponseId(notif.id);
+                                  setResponseForm({
+                                    topicCovered: '',
+                                    materialNeeded: false,
+                                    materialRequest: '',
+                                    notes: '',
+                                  });
+                                }}
+                              >
+                                I attended
+                              </button>
+                              <button
+                                className="btn-secondary text-xs text-red-600 border-red-200 hover:bg-red-50"
+                                disabled={classResponseMutation.isPending}
+                                onClick={() =>
+                                  classResponseMutation.mutate({
+                                    notificationId: notif.id,
+                                    action: 'missed',
+                                  })
+                                }
+                              >
+                                {classResponseMutation.isPending ? 'Saving…' : 'I missed class'}
+                              </button>
+                              {notif.metadata?.courseId && (
+                                <Link
+                                  to={`/courses/${notif.metadata.courseId}`}
+                                  className="btn-secondary text-xs"
+                                >
+                                  Open course
+                                </Link>
+                              )}
+                            </div>
                           ) : (
+                            /* "I attended" topic form */
                             <div className="space-y-2">
+                              <p className="text-xs text-text-secondary font-medium">
+                                What topic was covered today?
+                              </p>
                               <input
                                 className="input text-xs"
-                                placeholder="What topic was covered today?"
+                                placeholder="e.g. Linked Lists, Chapter 3..."
                                 value={responseForm.topicCovered}
                                 onChange={(e) =>
                                   setResponseForm((prev) => ({ ...prev, topicCovered: e.target.value }))
@@ -191,7 +257,7 @@ export default function NotificationsPage() {
                                     setResponseForm((prev) => ({ ...prev, materialNeeded: e.target.checked }))
                                   }
                                 />
-                                Need course material for this topic
+                                I need course material for this topic
                               </label>
                               {responseForm.materialNeeded && (
                                 <input
@@ -204,8 +270,8 @@ export default function NotificationsPage() {
                                 />
                               )}
                               <textarea
-                                className="input py-2 text-xs min-h-[70px]"
-                                placeholder="Optional note for teacher"
+                                className="input py-2 text-xs min-h-[64px]"
+                                placeholder="Optional note for your teacher"
                                 value={responseForm.notes}
                                 onChange={(e) =>
                                   setResponseForm((prev) => ({ ...prev, notes: e.target.value }))
@@ -214,10 +280,11 @@ export default function NotificationsPage() {
                               <div className="flex gap-2">
                                 <button
                                   className="btn-primary text-xs"
-                                  disabled={!responseForm.topicCovered.trim() || classResponseMutation.isPending}
+                                  disabled={responseForm.topicCovered.trim().length < 2 || classResponseMutation.isPending}
                                   onClick={() =>
                                     classResponseMutation.mutate({
                                       notificationId: notif.id,
+                                      action: 'attended',
                                       topicCovered: responseForm.topicCovered,
                                       materialNeeded: responseForm.materialNeeded,
                                       materialRequest: responseForm.materialRequest || undefined,
@@ -225,7 +292,7 @@ export default function NotificationsPage() {
                                     })
                                   }
                                 >
-                                  {classResponseMutation.isPending ? 'Submitting...' : 'Submit'}
+                                  {classResponseMutation.isPending ? 'Submitting…' : 'Submit'}
                                 </button>
                                 <button
                                   className="btn-secondary text-xs"

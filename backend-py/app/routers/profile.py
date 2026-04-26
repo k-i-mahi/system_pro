@@ -11,13 +11,13 @@ _ACCEPTED_IMAGE = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 router = APIRouter(dependencies=[Depends(get_current_user_id)])
 
 
-@router.get("/")
+@router.get("")
 async def get_profile(db: DBDep, user_id: CurrentUserIdDep):
     data = await profile_service.get_profile(db, user_id)
     return success(data)
 
 
-@router.patch("/")
+@router.patch("")
 async def update_profile(body: UpdateProfileRequest, db: DBDep, user_id: CurrentUserIdDep):
     data = await profile_service.update_profile(db, user_id, body.model_dump(exclude_none=True))
     return success(data)
@@ -38,7 +38,7 @@ async def upload_avatar(
     return success(data)
 
 
-@router.delete("/")
+@router.delete("")
 async def delete_account(db: DBDep, user_id: CurrentUserIdDep):
     data = await profile_service.delete_account(db, user_id)
     return success(data)

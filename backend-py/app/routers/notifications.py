@@ -10,7 +10,7 @@ from app.services import notifications_service
 router = APIRouter(dependencies=[Depends(get_current_user_id)])
 
 
-@router.get("/")
+@router.get("")
 async def list_notifications(db: DBDep, user_id: CurrentUserIdDep, page: int = 1, limit: int = 20):
     items, total = await notifications_service.list_notifications(db, user_id, page, limit)
     return success(items, meta={"page": page, "limit": limit, "total": total})

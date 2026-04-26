@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { BookOpen, RefreshCw, Send, Sparkles } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '@/stores/auth.store';
+import { fetchWithApiAuth } from '@/lib/api';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
 import { CitationChip, renderWithCitations, type Citation } from './CitationChip';
@@ -17,6 +19,8 @@ interface Answer {
 export interface CourseMaterialOption {
   id: string;
   title: string;
+  /** Owning week/topic (from API). Required for re-index when sidebar is “All topics” or file belongs elsewhere. */
+  topicId?: string;
   fileType?: string;
   hasEmbeddings?: boolean;
   ingestStatus?: string;
@@ -46,6 +50,7 @@ function ingestBadge(m: CourseMaterialOption): { label: string; className: strin
 }
 
 export function AskCoursePane({ courseId, topicId, materials, onCitationClick }: Props) {
+  const queryClient = useQueryClient();
   const [question, setQuestion] = useState('');
   const [answers, setAnswers] = useState<Answer[]>([]);
   const [streaming, setStreaming] = useState(false);
@@ -59,7 +64,8 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
     [materials]
   );
 
-  const canReingest = user?.role === 'TUTOR' || user?.role === 'ADMIN' || user?.role === 'MENTOR';
+  /** Re-index is allowed for enrolled students and tutors; API enforces access. */
+  const canShowReingest = Boolean(user);
 
   useEffect(() => {
     setSelectedMaterialIds(fileMaterials.map((m) => m.id));
@@ -77,22 +83,35 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
     );
   }
 
-  async function reingest(materialId: string) {
-    if (!courseId || !topicId) return;
-    try {
-      const r = await fetch(
-        `/api/courses/${courseId}/topics/${topicId}/materials/${materialId}/reingest`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${useAuthStore.getState().accessToken || ''}`,
-          },
-        }
+  async function reingest(materialId: string, materialTopicId?: string | null) {
+    const topicForUrl = (materialTopicId || topicId || '').trim();
+    if (!courseId || !topicForUrl) {
+      toast.error(
+        'Cannot re-index without the file’s topic. Pick “All topics” or the week that contains this file, then refresh.'
       );
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return;
+    }
+    try {
+      const r = await fetchWithApiAuth(
+        `/api/courses/${courseId}/topics/${topicForUrl}/materials/${materialId}/reingest`,
+        { method: 'POST', headers: { Accept: 'application/json' } }
+      );
+      if (!r.ok) {
+        let detail = `Request failed (${r.status})`;
+        try {
+          const body = (await r.json()) as { error?: { message?: string } };
+          if (body?.error?.message) detail = body.error.message;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
+      }
+      if (courseId) {
+        void queryClient.invalidateQueries({ queryKey: ['course', courseId] });
+      }
       toast.success('Re-index started for this file.');
-    } catch {
-      toast.error('Could not start re-index.');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not start re-index.');
     }
   }
 
@@ -126,12 +145,9 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
     }
 
     try {
-      const response = await fetch('/api/ai-tutor/ask-course', {
+      const response = await fetchWithApiAuth('/api/ai-tutor/ask-course', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${useAuthStore.getState().accessToken || ''}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -315,12 +331,16 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
                   <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium', badge.className)}>
                     {badge.label}
                   </span>
-                  {canReingest && (m.ingestStatus === 'FAILED' || (m.ingestStatus === 'DONE' && !m.hasEmbeddings)) && (
+                  {canShowReingest &&
+                    (m.ingestStatus === 'PENDING' ||
+                      m.ingestStatus === 'PROCESSING' ||
+                      m.ingestStatus === 'FAILED' ||
+                      (m.ingestStatus === 'DONE' && !m.hasEmbeddings)) && (
                     <button
                       type="button"
                       className="shrink-0 rounded p-1 text-text-secondary hover:bg-border hover:text-text-primary"
-                      title="Re-run indexing"
-                      onClick={() => reingest(m.id)}
+                      title="Re-run indexing (use if stuck on Queued)"
+                      onClick={() => reingest(m.id, m.topicId)}
                     >
                       <RefreshCw className="h-3.5 w-3.5" />
                     </button>

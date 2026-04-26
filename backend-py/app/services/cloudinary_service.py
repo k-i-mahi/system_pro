@@ -26,6 +26,12 @@ def _ensure_configured() -> None:
 
 async def upload_file(file_bytes: bytes, folder: str) -> dict:
     """Upload bytes to Cloudinary. Returns {public_id, secure_url}."""
+    if not settings.CLOUDINARY_CLOUD_NAME or not settings.CLOUDINARY_API_KEY:
+        raise RuntimeError(
+            "Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, "
+            "and CLOUDINARY_API_SECRET in your .env file to enable file uploads."
+        )
+
     _ensure_configured()
 
     def _upload() -> dict:
@@ -33,6 +39,7 @@ async def upload_file(file_bytes: bytes, folder: str) -> dict:
             file_bytes,
             folder=f"{settings.CLOUDINARY_UPLOAD_FOLDER}/{folder}",
             resource_type="auto",
+            access_mode="public",
         )
         return {"public_id": result["public_id"], "secure_url": result["secure_url"]}
 

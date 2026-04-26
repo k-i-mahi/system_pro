@@ -57,16 +57,18 @@ async def test_register_and_login(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_register_admin_role_allowed(client: AsyncClient) -> None:
+async def test_register_admin_role_forbidden(client: AsyncClient) -> None:
+    """ADMIN self-registration must be blocked at the schema level."""
     payload = {
         "universityName": "Test University",
         "name": "Admin User",
-        "email": "pytest_admin@test.invalid",
+        "email": "pytest_admin2107001@stud.kuet.ac.bd",
         "password": "Password123",
         "role": "ADMIN",
     }
     r = await client.post(f"{BASE}/register", json=payload)
-    assert r.status_code in (201, 409)
+    assert r.status_code == 422
+    assert "STUDENT" in str(r.json()) or "TUTOR" in str(r.json()) or "Registration" in str(r.json())
 
 
 @pytest.mark.asyncio

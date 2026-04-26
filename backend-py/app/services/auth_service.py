@@ -71,6 +71,9 @@ async def _revoke_user_sessions(redis: aioredis.Redis, user_id: str) -> None:
 
 
 async def register(db: AsyncSession, redis: aioredis.Redis, body: RegisterRequest) -> dict:
+    if body.role not in (Role.STUDENT, Role.TUTOR):
+        raise ValidationError("Registration is only available for STUDENT and TUTOR roles")
+
     result = await db.execute(select(User).where(User.email == body.email))
     if result.scalar_one_or_none():
         raise ConflictError("Account is already registered. Please sign in!")

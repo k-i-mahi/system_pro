@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Globe, Lock, Bell as BellIcon, School } from 'lucide-react';
+import { Globe, Bell as BellIcon, School } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '@/stores/auth.store';
+import { isStudent } from '@/lib/rbac';
 
 interface SettingsData {
   language?: string;
@@ -18,10 +20,32 @@ interface SettingsData {
 
 const TABS = [
   { id: 'general', label: 'General', icon: Globe },
-  { id: 'password', label: 'Password', icon: Lock },
   { id: 'notifications', label: 'Notifications', icon: BellIcon },
   { id: 'integrations', label: 'Integrations', icon: School },
 ];
+
+const NOTIFICATION_OPTIONS = [
+  {
+    key: 'notifChat',
+    title: 'Community chat and replies',
+    description: 'Stay updated when someone replies in your classroom discussions or community threads.',
+  },
+  {
+    key: 'notifNewestUpdate',
+    title: 'Class reminders and follow-ups',
+    description: 'Receive reminders for routine items, class follow-ups, and upcoming academic activity.',
+  },
+  {
+    key: 'notifCourseOfMonth',
+    title: 'System announcements',
+    description: 'Get product updates, platform notices, and other important service announcements.',
+  },
+  {
+    key: 'notifMentorOfMonth',
+    title: 'Mentor highlights',
+    description: 'See mentor spotlight and curated learning recommendations when available.',
+  },
+] as const;
 
 interface GoogleClassroomCourse {
   id: string;
@@ -42,10 +66,16 @@ interface GoogleAssignment {
   dueAt?: string;
 }
 
+interface GoogleStatus {
+  connected: boolean;
+  email?: string | null;
+}
+
 export default function SettingsPage() {
   const queryClient = useQueryClient();
   const logout = useAuthStore((s) => s.logout);
-  const [activeTab, setActiveTab] = useState('general');
+  const user = useAuthStore((s) => s.user);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [generalForm, setGeneralForm] = useState({
     language: 'en',
     timezone: 'Asia/Dhaka',
@@ -59,12 +89,16 @@ export default function SettingsPage() {
     notifCourseOfMonth: true,
   });
   const [selectedGoogleCourseId, setSelectedGoogleCourseId] = useState('');
-  const [passwordForm, setPasswordForm] = useState({ oldPassword: '', newPassword: '', confirmPassword: '' });
+  const isStudentUser = isStudent(user);
+  const availableTabs = isStudentUser ? TABS : TABS.filter((tab) => tab.id !== 'integrations');
+  const requestedTab = searchParams.get('tab') || 'general';
+  const activeTab = availableTabs.some((tab) => tab.id === requestedTab) ? requestedTab : 'general';
 
   const { data: settings, isLoading, isError, refetch, error } = useQuery<SettingsData>({
     queryKey: ['settings'],
     queryFn: () => api.get('/settings').then((r) => r.data.data),
-    retry: false,
+    retry: 1,
+    staleTime: 30_000,
   });
 
   useEffect(() => {
@@ -104,15 +138,6 @@ export default function SettingsPage() {
     onError: () => toast.error('Failed to save settings'),
   });
 
-  const passwordMutation = useMutation({
-    mutationFn: (data: any) => api.patch('/settings/password', data),
-    onSuccess: () => {
-      setPasswordForm({ oldPassword: '', newPassword: '', confirmPassword: '' });
-      toast.success('Password updated');
-    },
-    onError: (err: any) => toast.error(err.response?.data?.error?.message || 'Failed'),
-  });
-
   const notifMutation = useMutation({
     mutationFn: (data: any) => api.patch('/settings/notifications', data),
     onSuccess: () => {
@@ -122,10 +147,11 @@ export default function SettingsPage() {
     onError: () => toast.error('Failed to save notification settings'),
   });
 
-  const { data: googleStatus, refetch: refetchGoogleStatus } = useQuery<{ connected: boolean }>({
+  const { data: googleStatus, refetch: refetchGoogleStatus } = useQuery<GoogleStatus>({
     queryKey: ['google-classroom-status'],
     queryFn: () => api.get('/google-classroom/status').then((r) => r.data.data),
     retry: false,
+    enabled: isStudentUser,
   });
 
   const { data: googleCourses, isLoading: googleCoursesLoading, refetch: refetchGoogleCourses } = useQuery<
@@ -133,7 +159,7 @@ export default function SettingsPage() {
   >({
     queryKey: ['google-classroom-courses'],
     queryFn: () => api.get('/google-classroom/courses').then((r) => r.data.data),
-    enabled: Boolean(googleStatus?.connected),
+    enabled: isStudentUser && Boolean(googleStatus?.connected),
     retry: false,
   });
 
@@ -145,7 +171,7 @@ export default function SettingsPage() {
     queryKey: ['google-classroom-assignments', selectedGoogleCourseId],
     queryFn: () =>
       api.get(`/google-classroom/courses/${selectedGoogleCourseId}/assignments`).then((r) => r.data.data),
-    enabled: Boolean(googleStatus?.connected && selectedGoogleCourseId),
+    enabled: isStudentUser && Boolean(googleStatus?.connected && selectedGoogleCourseId),
     retry: false,
   });
 
@@ -184,6 +210,14 @@ export default function SettingsPage() {
   });
 
   useEffect(() => {
+    if (requestedTab === activeTab) return;
+    const next = new URLSearchParams(searchParams);
+    if (activeTab === 'general') next.delete('tab');
+    else next.set('tab', activeTab);
+    setSearchParams(next, { replace: true });
+  }, [activeTab, requestedTab, searchParams, setSearchParams]);
+
+  useEffect(() => {
     if (!googleCourses?.length) {
       if (selectedGoogleCourseId) setSelectedGoogleCourseId('');
       return;
@@ -201,6 +235,10 @@ export default function SettingsPage() {
       toast.success('Google Classroom connected');
       refetchGoogleStatus();
       refetchGoogleCourses();
+    } else if (status === 'email-mismatch') {
+      toast.error('Use the same Google email that you used to sign in to Cognitive Copilot.');
+    } else if (status === 'student-only') {
+      toast.error('Google Classroom is available for student accounts only.');
     } else if (status === 'error') {
       toast.error('Google Classroom connection failed');
     }
@@ -209,15 +247,11 @@ export default function SettingsPage() {
   }, [refetchGoogleCourses, refetchGoogleStatus]);
 
 
-  function handlePasswordSubmit() {
-    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-      toast.error('Passwords do not match');
-      return;
-    }
-    passwordMutation.mutate({
-      oldPassword: passwordForm.oldPassword,
-      newPassword: passwordForm.newPassword,
-    });
+  function handleTabChange(tabId: string) {
+    const next = new URLSearchParams(searchParams);
+    if (tabId === 'general') next.delete('tab');
+    else next.set('tab', tabId);
+    setSearchParams(next, { replace: true });
   }
 
   return (
@@ -227,11 +261,11 @@ export default function SettingsPage() {
       <div className="flex gap-6">
         {/* Tab sidebar */}
         <div className="w-48 shrink-0">
-          <div className="space-y-1">
-            {TABS.map((tab) => (
+          <div className="rounded-2xl border border-border bg-white p-3 shadow-sm space-y-1">
+            {availableTabs.map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => handleTabChange(tab.id)}
                 className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                   activeTab === tab.id
                     ? 'bg-primary text-white'
@@ -247,141 +281,132 @@ export default function SettingsPage() {
 
         {/* Content */}
         <div className="flex-1">
-          {isLoading && (
+          {isLoading && !settings && (
             <div className="card">
               <p className="text-text-muted">Loading settings...</p>
             </div>
           )}
 
-          {isError && (
+          {isError && !settings && activeTab !== 'integrations' && (
             <div className="card">
-              <p className="text-danger mb-3">Could not load settings.</p>
-              <button className="btn-secondary" onClick={() => refetch()}>
+              <p className="mb-1 font-medium text-danger">Could not load settings.</p>
+              <p className="mb-4 text-sm text-text-secondary">
+                {(error as any)?.response?.status === 401
+                  ? 'Your session may have expired. Please refresh the page.'
+                  : 'This may be a temporary connection issue. Try again in a moment.'}
+              </p>
+              <button className="btn-secondary" onClick={() => void refetch()}>
+                Retry
+              </button>
+            </div>
+          )}
+
+          {isError && settings && activeTab !== 'integrations' && (
+            <div className="mb-4 flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <p className="text-sm text-amber-700">Showing cached settings — could not refresh from server.</p>
+              <button className="text-xs font-medium text-amber-700 underline" onClick={() => void refetch()}>
                 Retry
               </button>
             </div>
           )}
 
           {activeTab === 'general' && settings && (
-            <div className="card">
-              <h2 className="font-semibold mb-4">General Settings</h2>
-              <div className="space-y-4 max-w-md">
-                <div>
-                  <label className="label">Language</label>
-                  <select
-                    className="input"
-                    value={generalForm.language}
-                    onChange={(e) => setGeneralForm((prev) => ({ ...prev, language: e.target.value }))}
-                  >
-                    <option value="en">English</option>
-                    <option value="bn">Bangla</option>
-                  </select>
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_280px]">
+              <div className="card">
+                <div className="mb-6">
+                  <h2 className="font-semibold">General Settings</h2>
+                  <p className="mt-2 text-sm text-text-secondary">
+                    Control how time, language, and calendar information appear across your dashboard.
+                  </p>
                 </div>
-                <div>
-                  <label className="label">Timezone</label>
-                  <select
-                    className="input"
-                    value={generalForm.timezone}
-                    onChange={(e) => setGeneralForm((prev) => ({ ...prev, timezone: e.target.value }))}
-                  >
-                    <option value="Asia/Dhaka">Asia/Dhaka (GMT+6)</option>
-                    <option value="UTC">UTC</option>
-                    <option value="America/New_York">America/New_York (EST)</option>
-                    <option value="Europe/London">Europe/London (GMT)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Time Format</label>
-                  <select
-                    className="input"
-                    value={generalForm.timeFormat}
-                    onChange={(e) => setGeneralForm((prev) => ({ ...prev, timeFormat: e.target.value }))}
-                  >
-                    <option value="H12">12 Hour</option>
-                    <option value="H24">24 Hour</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Date Format</label>
-                  <select
-                    className="input"
-                    value={generalForm.dateFormat}
-                    onChange={(e) => setGeneralForm((prev) => ({ ...prev, dateFormat: e.target.value }))}
-                  >
-                    <option value="DD_MM_YYYY">DD/MM/YYYY</option>
-                    <option value="MM_DD_YYYY">MM/DD/YYYY</option>
-                    <option value="YYYY_MM_DD">YYYY-MM-DD</option>
-                  </select>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="label">Language</label>
+                    <select
+                      className="input"
+                      value={generalForm.language}
+                      onChange={(e) => setGeneralForm((prev) => ({ ...prev, language: e.target.value }))}
+                    >
+                      <option value="en">English</option>
+                      <option value="bn">Bangla</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Timezone</label>
+                    <select
+                      className="input"
+                      value={generalForm.timezone}
+                      onChange={(e) => setGeneralForm((prev) => ({ ...prev, timezone: e.target.value }))}
+                    >
+                      <option value="Asia/Dhaka">Asia/Dhaka (GMT+6)</option>
+                      <option value="UTC">UTC</option>
+                      <option value="America/New_York">America/New_York (EST)</option>
+                      <option value="Europe/London">Europe/London (GMT)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Time Format</label>
+                    <select
+                      className="input"
+                      value={generalForm.timeFormat}
+                      onChange={(e) => setGeneralForm((prev) => ({ ...prev, timeFormat: e.target.value }))}
+                    >
+                      <option value="H12">12 Hour</option>
+                      <option value="H24">24 Hour</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Date Format</label>
+                    <select
+                      className="input"
+                      value={generalForm.dateFormat}
+                      onChange={(e) => setGeneralForm((prev) => ({ ...prev, dateFormat: e.target.value }))}
+                    >
+                      <option value="DD_MM_YYYY">DD/MM/YYYY</option>
+                      <option value="MM_DD_YYYY">MM/DD/YYYY</option>
+                      <option value="YYYY_MM_DD">YYYY-MM-DD</option>
+                    </select>
+                  </div>
                 </div>
                 <button
                   onClick={() => generalMutation.mutate(generalForm)}
-                  className="btn-primary"
+                  className="btn-primary mt-6"
                   disabled={generalMutation.isPending}
                 >
                   {generalMutation.isPending ? 'Saving...' : 'Save General Settings'}
                 </button>
               </div>
-            </div>
-          )}
 
-          {activeTab === 'password' && (
-            <div className="card">
-              <h2 className="font-semibold mb-4">Change Password</h2>
-              <div className="space-y-4 max-w-md">
-                <div>
-                  <label className="label">Current Password</label>
-                  <input
-                    type="password"
-                    className="input"
-                    value={passwordForm.oldPassword}
-                    onChange={(e) => setPasswordForm((p) => ({ ...p, oldPassword: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="label">New Password</label>
-                  <input
-                    type="password"
-                    className="input"
-                    value={passwordForm.newPassword}
-                    onChange={(e) => setPasswordForm((p) => ({ ...p, newPassword: e.target.value }))}
-                    minLength={8}
-                  />
-                </div>
-                <div>
-                  <label className="label">Confirm New Password</label>
-                  <input
-                    type="password"
-                    className="input"
-                    value={passwordForm.confirmPassword}
-                    onChange={(e) => setPasswordForm((p) => ({ ...p, confirmPassword: e.target.value }))}
-                  />
-                </div>
-                <button
-                  onClick={handlePasswordSubmit}
-                  className="btn-primary"
-                  disabled={!passwordForm.oldPassword || !passwordForm.newPassword || passwordMutation.isPending}
-                >
-                  {passwordMutation.isPending ? 'Updating...' : 'Update Password'}
-                </button>
+              <div className="card h-fit">
+                <h3 className="font-semibold">Account</h3>
+                <p className="mt-2 text-sm text-text-secondary">
+                  Update your profile, avatar, academic details, and account information from the dedicated account page.
+                </p>
+                <Link to="/profile" className="btn-secondary mt-4 inline-flex">
+                  Open Account Section
+                </Link>
               </div>
             </div>
           )}
 
           {activeTab === 'notifications' && settings && (
             <div className="card">
-              <h2 className="font-semibold mb-4">Notification Preferences</h2>
+              <div className="mb-6">
+                <h2 className="font-semibold">Notification and Reminder Settings</h2>
+                <p className="mt-2 text-sm text-text-secondary">
+                  Decide which reminders, conversation updates, and platform notices should reach you.
+                </p>
+              </div>
               <div className="space-y-4">
-                {[
-                  { key: 'notifChat', label: 'Chat notifications' },
-                  { key: 'notifNewestUpdate', label: 'Newest updates' },
-                  { key: 'notifMentorOfMonth', label: 'Mentor of the month' },
-                  { key: 'notifCourseOfMonth', label: 'Course of the month' },
-                ].map((item) => (
+                {NOTIFICATION_OPTIONS.map((item) => (
                   <label
                     key={item.key}
-                    className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-border px-3 py-2 hover:bg-bg-main"
+                    className="flex cursor-pointer items-start justify-between gap-4 rounded-xl border border-border px-4 py-3 hover:bg-bg-main"
                   >
-                    <span className="text-sm text-text-primary">{item.label}</span>
+                    <span>
+                      <span className="block text-sm font-medium text-text-primary">{item.title}</span>
+                      <span className="mt-1 block text-xs text-text-secondary">{item.description}</span>
+                    </span>
                     <input
                       type="checkbox"
                       className="h-4 w-4 shrink-0 rounded border-border text-primary focus:ring-primary"
@@ -406,11 +431,11 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {activeTab === 'integrations' && (
+          {activeTab === 'integrations' && isStudentUser && (
             <div className="card">
               <h2 className="font-semibold mb-4">Google Classroom</h2>
               <p className="text-sm text-text-secondary mb-4">
-                Connect your Google account to fetch your active Google Classroom courses.
+                Connect the same Google student email you use to sign in here to fetch your active Google Classroom courses and import assignment deadlines into your routine.
               </p>
 
               <div className="flex items-center gap-3 mb-5">
@@ -427,7 +452,7 @@ export default function SettingsPage() {
                     onClick={() => connectGoogleMutation.mutate()}
                     disabled={connectGoogleMutation.isPending}
                   >
-                    {connectGoogleMutation.isPending ? 'Connecting...' : 'Connect Google Classroom'}
+                  {connectGoogleMutation.isPending ? 'Connecting...' : 'Connect Google Classroom'}
                   </button>
                 ) : (
                   <button
@@ -439,6 +464,12 @@ export default function SettingsPage() {
                   </button>
                 )}
               </div>
+
+              {googleStatus?.email && (
+                <p className="mb-5 text-xs text-text-muted">
+                  Connected as {googleStatus.email}
+                </p>
+              )}
 
               {googleStatus?.connected && (
                 <div className="space-y-3">
