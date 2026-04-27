@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, time, timezone
 
-from sqlalchemy import and_, case, func, or_, select, update
+from sqlalchemy import and_, asc, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -645,12 +645,25 @@ async def get_course_detail(db: AsyncSession, course_id: str, user_id: str | Non
         local_now = datetime.now(timezone.utc).astimezone(tz)
         local_today = local_now.date()
         today_dow = _PY_DOW_MAP[local_today.weekday()]
-        today_slot = (await db.execute(
-            select(ScheduleSlot).where(
-                ScheduleSlot.course_id == course_id,
-                ScheduleSlot.day_of_week == today_dow,
+        if viewer and viewer.role == Role.STUDENT:
+            slot_owner_filter = ScheduleSlot.owner_user_id == user_id
+        else:
+            slot_owner_filter = or_(
+                ScheduleSlot.owner_user_id.is_(None),
+                ScheduleSlot.owner_user_id == user_id,
             )
-        )).scalar_one_or_none()
+        today_slot = (
+            await db.execute(
+                select(ScheduleSlot)
+                .where(
+                    ScheduleSlot.course_id == course_id,
+                    ScheduleSlot.day_of_week == today_dow,
+                    slot_owner_filter,
+                )
+                .order_by(asc(ScheduleSlot.owner_user_id).nulls_first())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
 
         if today_slot:
             attendance_dt = datetime.combine(local_today, time.min, tzinfo=timezone.utc)

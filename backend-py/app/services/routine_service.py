@@ -5,11 +5,12 @@ import logging
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.models.community import Community, CommunityMember
 from app.models.course import Course, Enrollment, ScheduleSlot, Topic, TopicProgress
 from app.models.misc import Notification
-from app.models.enums import CommunityRole, DayOfWeek, SlotType
+from app.models.enums import CommunityRole, DayOfWeek, Role, SlotType
+from app.models.user import User
 from app.models.misc import RoutineScan
 from app.schemas.routine import BulkCreateCoursesRequest, MoveSlotRequest, UpdateSlotRequest
 from app.services.course_identity import find_course_by_code, normalize_course_code
@@ -71,6 +72,26 @@ async def _user_course_ids(db: AsyncSession, user_id: str) -> list[str]:
     return list(ids)
 
 
+async def _require_slot_for_mutation(db: AsyncSession, slot_id: str, user_id: str) -> ScheduleSlot:
+    slot = (await db.execute(select(ScheduleSlot).where(ScheduleSlot.id == slot_id))).scalar_one_or_none()
+    if not slot:
+        raise NotFoundError("Slot not found")
+    viewer = await db.get(User, user_id)
+    if not viewer:
+        raise NotFoundError("User not found")
+    if viewer.role == Role.STUDENT:
+        if slot.owner_user_id != user_id:
+            raise ForbiddenError("You can only change slots in your personal routine.")
+    elif slot.owner_user_id is not None:
+        raise ForbiddenError("This slot belongs to a student's personal routine.")
+    return slot
+
+
+def _bulk_slot_owner_id(role: Role, user_id: str) -> str | None:
+    """Students get personal slots; tutors/admins create shared (course) timetable rows."""
+    return user_id if role == Role.STUDENT else None
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def scan_routine(
@@ -114,19 +135,27 @@ async def scan_routine(
 
 
 async def get_schedule(db: AsyncSession, user_id: str) -> list[dict]:
+    """Student routine is isolated per user (ownerUserId). Tutors see shared course timetable rows only."""
     slot_map: dict[str, dict] = {}
 
-    # Enrolled courses → schedule slots
+    viewer = await db.get(User, user_id)
+    if not viewer:
+        return []
+
     enrolled = await db.execute(
         select(Enrollment.course_id).where(Enrollment.user_id == user_id)
     )
     course_ids = list(enrolled.scalars().all())
 
     if course_ids:
+        if viewer.role == Role.STUDENT:
+            owner_clause = ScheduleSlot.owner_user_id == user_id
+        else:
+            owner_clause = ScheduleSlot.owner_user_id.is_(None)
         slots_result = await db.execute(
             select(ScheduleSlot, Course)
             .join(Course, ScheduleSlot.course_id == Course.id)
-            .where(ScheduleSlot.course_id.in_(course_ids))
+            .where(ScheduleSlot.course_id.in_(course_ids), owner_clause)
         )
         for slot, course in slots_result.all():
             slot_map[slot.id] = _slot_to_dict(
@@ -136,7 +165,6 @@ async def get_schedule(db: AsyncSession, user_id: str) -> list[dict]:
                 courseId=course.id,
             )
 
-    # Tutor community courses → schedule slots (deduplicated)
     tutor_result = await db.execute(
         select(Community.course_id)
         .join(CommunityMember, CommunityMember.community_id == Community.id)
@@ -144,11 +172,14 @@ async def get_schedule(db: AsyncSession, user_id: str) -> list[dict]:
     )
     tutor_course_ids = [cid for cid in tutor_result.scalars().all() if cid not in course_ids]
 
-    if tutor_course_ids:
+    if tutor_course_ids and viewer.role != Role.STUDENT:
         tutor_slots = await db.execute(
             select(ScheduleSlot, Course)
             .join(Course, ScheduleSlot.course_id == Course.id)
-            .where(ScheduleSlot.course_id.in_(tutor_course_ids))
+            .where(
+                ScheduleSlot.course_id.in_(tutor_course_ids),
+                ScheduleSlot.owner_user_id.is_(None),
+            )
         )
         for slot, course in tutor_slots.all():
             if slot.id not in slot_map:
@@ -163,13 +194,23 @@ async def get_schedule(db: AsyncSession, user_id: str) -> list[dict]:
 
 
 async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCoursesRequest) -> list[dict]:
+    viewer = await db.get(User, user_id)
+    if not viewer:
+        raise NotFoundError("User not found")
+    role = viewer.role
+    slot_owner = _bulk_slot_owner_id(role, user_id)
+
     user_course_ids = await _user_course_ids(db, user_id)
     existing_slots: list[dict] = []
     if user_course_ids:
+        if role == Role.STUDENT:
+            owner_clause = ScheduleSlot.owner_user_id == user_id
+        else:
+            owner_clause = ScheduleSlot.owner_user_id.is_(None)
         existing_result = await db.execute(
             select(ScheduleSlot, Course)
             .join(Course, ScheduleSlot.course_id == Course.id)
-            .where(ScheduleSlot.course_id.in_(user_course_ids))
+            .where(ScheduleSlot.course_id.in_(user_course_ids), owner_clause)
         )
         existing_slots = [
             {
@@ -255,21 +296,24 @@ async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCo
         if not enr_result.scalar_one_or_none():
             db.add(Enrollment(user_id=user_id, course_id=course.id))
 
-        # Create schedule slots — skip exact duplicates to prevent double-saves.
+        # Create schedule slots — skip exact duplicates to prevent double-saves (per owner).
         for slot in course_data.slots:
-            dup = await db.execute(
-                select(ScheduleSlot).where(
-                    ScheduleSlot.course_id == course.id,
-                    ScheduleSlot.day_of_week == slot.dayOfWeek,
-                    ScheduleSlot.start_time == slot.startTime,
-                    ScheduleSlot.end_time == slot.endTime,
-                )
+            dup_stmt = select(ScheduleSlot).where(
+                ScheduleSlot.course_id == course.id,
+                ScheduleSlot.day_of_week == slot.dayOfWeek,
+                ScheduleSlot.start_time == slot.startTime,
+                ScheduleSlot.end_time == slot.endTime,
             )
+            if slot_owner is None:
+                dup_stmt = dup_stmt.where(ScheduleSlot.owner_user_id.is_(None))
+            else:
+                dup_stmt = dup_stmt.where(ScheduleSlot.owner_user_id == slot_owner)
+            dup = await db.execute(dup_stmt)
             if dup.scalar_one_or_none() is not None:
-                # Identical slot already exists — don't create a duplicate.
                 continue
             db.add(ScheduleSlot(
                 course_id=course.id,
+                owner_user_id=slot_owner,
                 day_of_week=slot.dayOfWeek,
                 start_time=slot.startTime,
                 end_time=slot.endTime,
@@ -295,11 +339,8 @@ async def bulk_create_courses(db: AsyncSession, user_id: str, body: BulkCreateCo
     return results
 
 
-async def update_slot(db: AsyncSession, slot_id: str, body: UpdateSlotRequest) -> dict:
-    result = await db.execute(select(ScheduleSlot).where(ScheduleSlot.id == slot_id))
-    slot = result.scalar_one_or_none()
-    if not slot:
-        raise NotFoundError("Slot not found")
+async def update_slot(db: AsyncSession, slot_id: str, user_id: str, body: UpdateSlotRequest) -> dict:
+    slot = await _require_slot_for_mutation(db, slot_id, user_id)
 
     updates = body.model_dump(exclude_none=True)
     if "dayOfWeek" in updates:
@@ -321,30 +362,31 @@ async def update_slot(db: AsyncSession, slot_id: str, body: UpdateSlotRequest) -
     return _slot_to_dict(slot)
 
 
-async def delete_slot(db: AsyncSession, slot_id: str) -> None:
-    result = await db.execute(select(ScheduleSlot).where(ScheduleSlot.id == slot_id))
-    if not result.scalar_one_or_none():
-        raise NotFoundError("Slot not found")
+async def delete_slot(db: AsyncSession, slot_id: str, user_id: str) -> None:
+    await _require_slot_for_mutation(db, slot_id, user_id)
     await db.execute(delete(ScheduleSlot).where(ScheduleSlot.id == slot_id))
     await db.commit()
 
 
 async def move_slot(db: AsyncSession, slot_id: str, user_id: str, body: MoveSlotRequest) -> dict:
-    result = await db.execute(select(ScheduleSlot).where(ScheduleSlot.id == slot_id))
-    slot = result.scalar_one_or_none()
-    if not slot:
-        raise NotFoundError("Slot not found")
+    slot = await _require_slot_for_mutation(db, slot_id, user_id)
+
+    viewer = await db.get(User, user_id)
+    if not viewer:
+        raise NotFoundError("User not found")
 
     enrolled_course_ids = await _user_course_ids(db, user_id)
 
-    # All slots on target day (excluding the one being moved)
-    day_result = await db.execute(
-        select(ScheduleSlot).where(
-            ScheduleSlot.course_id.in_(enrolled_course_ids),
-            ScheduleSlot.day_of_week == body.dayOfWeek,
-            ScheduleSlot.id != slot_id,
-        )
+    day_stmt = select(ScheduleSlot).where(
+        ScheduleSlot.course_id.in_(enrolled_course_ids),
+        ScheduleSlot.day_of_week == body.dayOfWeek,
+        ScheduleSlot.id != slot_id,
     )
+    if viewer.role == Role.STUDENT:
+        day_stmt = day_stmt.where(ScheduleSlot.owner_user_id == user_id)
+    else:
+        day_stmt = day_stmt.where(ScheduleSlot.owner_user_id.is_(None))
+    day_result = await db.execute(day_stmt)
     slots_on_day = day_result.scalars().all()
     conflicts = [
         s for s in slots_on_day
@@ -397,13 +439,17 @@ async def move_slot(db: AsyncSession, slot_id: str, user_id: str, body: MoveSlot
 
         for conflict in conflicts:
             duration = _duration_minutes(conflict.start_time, conflict.end_time)
-            all_on_day_result = await db.execute(
-                select(ScheduleSlot).where(
-                    ScheduleSlot.course_id.in_(enrolled_course_ids),
-                    ScheduleSlot.day_of_week == body.dayOfWeek,
-                    ScheduleSlot.id != conflict.id,
-                ).order_by(ScheduleSlot.start_time)
+            shift_stmt = select(ScheduleSlot).where(
+                ScheduleSlot.course_id.in_(enrolled_course_ids),
+                ScheduleSlot.day_of_week == body.dayOfWeek,
+                ScheduleSlot.id != conflict.id,
             )
+            if viewer.role == Role.STUDENT:
+                shift_stmt = shift_stmt.where(ScheduleSlot.owner_user_id == user_id)
+            else:
+                shift_stmt = shift_stmt.where(ScheduleSlot.owner_user_id.is_(None))
+            shift_stmt = shift_stmt.order_by(ScheduleSlot.start_time)
+            all_on_day_result = await db.execute(shift_stmt)
             all_on_day = all_on_day_result.scalars().all()
 
             new_start = conflict.end_time
@@ -487,6 +533,13 @@ async def delete_course(db: AsyncSession, user_id: str, course_id: str) -> None:
     )
 
     await db.execute(delete(Enrollment).where(Enrollment.user_id == user_id, Enrollment.course_id == course_id))
+
+    await db.execute(
+        delete(ScheduleSlot).where(
+            ScheduleSlot.course_id == course_id,
+            ScheduleSlot.owner_user_id == user_id,
+        )
+    )
 
     any_enrollment_left = (
         await db.execute(select(Enrollment.id).where(Enrollment.course_id == course_id).limit(1))

@@ -58,7 +58,7 @@ async def bulk_create_courses(body: BulkCreateCoursesRequest, db: DBDep, user_id
 
 @router.put("/slots/{slot_id}")
 async def update_slot(slot_id: str, body: UpdateSlotRequest, db: DBDep, user_id: CurrentUserIdDep) -> JSONResponse:
-    slot = await routine_service.update_slot(db, slot_id, body)
+    slot = await routine_service.update_slot(db, slot_id, user_id, body)
     return resp.success(slot)
 
 
@@ -70,7 +70,7 @@ async def move_slot(slot_id: str, body: MoveSlotRequest, db: DBDep, user_id: Cur
 
 @router.delete("/slots/{slot_id}")
 async def delete_slot(slot_id: str, db: DBDep, user_id: CurrentUserIdDep) -> JSONResponse:
-    await routine_service.delete_slot(db, slot_id)
+    await routine_service.delete_slot(db, slot_id, user_id)
     return resp.success({"message": "Slot deleted"})
 
 

@@ -58,6 +58,10 @@ class ScheduleSlot(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_new_id)
     course_id: Mapped[str] = mapped_column("courseId", String, ForeignKey("Course.id", ondelete="CASCADE"))
+    # NULL = shared class / tutor timetable (community + tutor routine). Non-null = that user's personal routine.
+    owner_user_id: Mapped[str | None] = mapped_column(
+        "ownerUserId", String, ForeignKey("User.id", ondelete="SET NULL"), nullable=True
+    )
     day_of_week: Mapped[DayOfWeek] = mapped_column(
         "dayOfWeek", SAEnum(DayOfWeek, name="DayOfWeek", create_type=False)
     )

@@ -86,7 +86,11 @@ async def _ensure_daily_schedule_reminders(db: AsyncSession, user_id: str) -> No
                 select(ScheduleSlot, Course)
                 .join(Course, Course.id == ScheduleSlot.course_id)
                 .join(Enrollment, Enrollment.course_id == ScheduleSlot.course_id)
-                .where(Enrollment.user_id == user_id, ScheduleSlot.day_of_week == day_enum)
+                .where(
+                    Enrollment.user_id == user_id,
+                    ScheduleSlot.day_of_week == day_enum,
+                    ScheduleSlot.owner_user_id == user_id,
+                )
             )
         ).all()
 
@@ -134,6 +138,7 @@ async def _ensure_daily_schedule_reminders(db: AsyncSession, user_id: str) -> No
                 CommunityMember.user_id == user_id,
                 CommunityMember.role == CommunityRole.TUTOR,
                 ScheduleSlot.day_of_week == day_enum,
+                ScheduleSlot.owner_user_id.is_(None),
             )
         )
     ).all()

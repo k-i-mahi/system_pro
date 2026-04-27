@@ -434,9 +434,16 @@ async def get_community(db: AsyncSession, community_id: str) -> dict:
         select(func.count(Announcement.id)).where(Announcement.community_id == community_id)
     )).scalar_one()
 
-    schedule_slots_raw = (await db.execute(
-        select(ScheduleSlot).where(ScheduleSlot.course_id == community.course_id).order_by(ScheduleSlot.day_of_week, ScheduleSlot.start_time)
-    )).scalars().all()
+    schedule_slots_raw = (
+        await db.execute(
+            select(ScheduleSlot)
+            .where(
+                ScheduleSlot.course_id == community.course_id,
+                ScheduleSlot.owner_user_id.is_(None),
+            )
+            .order_by(ScheduleSlot.day_of_week, ScheduleSlot.start_time)
+        )
+    ).scalars().all()
     schedule_slots = [
         {"id": s.id, "dayOfWeek": s.day_of_week, "startTime": s.start_time, "endTime": s.end_time, "type": s.type, "room": s.room}
         for s in schedule_slots_raw

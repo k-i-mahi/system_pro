@@ -85,7 +85,11 @@ async def _create_student_reminders(
             select(ScheduleSlot, Course)
             .join(Course, Course.id == ScheduleSlot.course_id)
             .join(Enrollment, Enrollment.course_id == ScheduleSlot.course_id)
-            .where(Enrollment.user_id == user.id, ScheduleSlot.day_of_week == day_enum)
+            .where(
+                Enrollment.user_id == user.id,
+                ScheduleSlot.day_of_week == day_enum,
+                ScheduleSlot.owner_user_id == user.id,
+            )
         )
     ).all()
 
@@ -140,6 +144,7 @@ async def _create_tutor_reminders(
                 CommunityMember.user_id == user.id,
                 CommunityMember.role == CommunityRole.TUTOR,
                 ScheduleSlot.day_of_week == day_enum,
+                ScheduleSlot.owner_user_id.is_(None),
             )
         )
     ).all()
@@ -221,6 +226,8 @@ async def check_post_class_attendance(ctx: dict) -> None:
                     uid = enr.user_id
                     user = await db.get(User, uid)
                     if not user or not user.notif_newest_update:
+                        continue
+                    if user.role == Role.STUDENT and slot.owner_user_id != uid:
                         continue
 
                     tz = user_timezone(user)
