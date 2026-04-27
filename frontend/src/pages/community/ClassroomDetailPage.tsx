@@ -279,7 +279,12 @@ function MarksTab({ communityId, isTutor }: { communityId: string; isTutor: bool
         }`,
       );
     },
-    onError: () => toast.error('Upload failed'),
+    onError: (err: unknown) => {
+      const msg =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ??
+        'Upload failed';
+      toast.error(msg);
+    },
   });
 
   if (!isTutor) {

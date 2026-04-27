@@ -716,67 +716,65 @@ async def upload_marks(
             f"Your instructor recorded official marks{f' for {label}' if label else ''}. "
             f"Open your course page — My Scores shows instructor-recorded CT/lab marks for {course_code}."
         )
-    else:
-        ann_title = f"{course_code} — {label} file posted" if label else f"{course_code} — marks file posted"
-        ann_body = (
-            f"Your instructor uploaded a marks file ({filename}){f' for {label}' if label else ''}. "
-            "If scores do not appear yet, check that roll numbers in the file match your profile."
+        announcement = Announcement(
+            community_id=community_id,
+            author_id=user_id,
+            title=ann_title,
+            body=ann_body,
+            file_url=secure_url,
+            student_feed_only=True,
         )
+        db.add(announcement)
+        await db.flush()
 
-    announcement = Announcement(
-        community_id=community_id,
-        author_id=user_id,
-        title=ann_title,
-        body=ann_body,
-        file_url=secure_url,
-        student_feed_only=True,
-    )
-    db.add(announcement)
-    await db.flush()
-
-    student_ids = (
-        await db.execute(
-            select(CommunityMember.user_id).where(
-                CommunityMember.community_id == community_id,
-                CommunityMember.role == CommunityRole.STUDENT,
+        student_ids = (
+            await db.execute(
+                select(CommunityMember.user_id).where(
+                    CommunityMember.community_id == community_id,
+                    CommunityMember.role == CommunityRole.STUDENT,
+                )
             )
-        )
-    ).scalars().all()
+        ).scalars().all()
 
-    notif_title = (
-        f"{course_code} {label} marks uploaded! Check your marks!"
-        if label
-        else f"{course_code} marks uploaded! Check your marks!"
-    )
-    notif_body = (
-        f"Official marks{f' for {label}' if label else ''} are on your course page under My Scores."
-        if updated > 0
-        else (
-            f"Your instructor posted a marks file{f' for {label}' if label else ''}. Open your course page for details."
+        notif_title = (
+            f"{course_code} {label} marks uploaded! Check your marks!"
+            if label
+            else f"{course_code} marks uploaded! Check your marks!"
         )
-    )
+        notif_body = f"Official marks{f' for {label}' if label else ''} are on your course page under My Scores."
 
-    for sid in student_ids:
-        await notification_service.create_notification(
-            db=db,
-            user_id=sid,
-            type=NotificationType.ANNOUNCEMENT,
-            title=notif_title,
-            body=notif_body,
-            metadata={
-                "notificationKey": f"marks_upload:{mark_upload.id}:{sid}",
-                "kind": "CT_MARKS_FILE_UPLOADED",
-                "communityId": community.id,
-                "courseId": community.course_id,
-                "courseCode": course_code,
-                "assessmentLabel": label,
-                "markUploadId": mark_upload.id,
-                "announcementId": announcement.id,
-                "deepLink": f"/courses/{community.course_id}",
-            },
-        )
+        for sid in student_ids:
+            await notification_service.create_notification(
+                db=db,
+                user_id=sid,
+                type=NotificationType.ANNOUNCEMENT,
+                title=notif_title,
+                body=notif_body,
+                metadata={
+                    "notificationKey": f"marks_upload:{mark_upload.id}:{sid}",
+                    "kind": "CT_MARKS_FILE_UPLOADED",
+                    "communityId": community.id,
+                    "courseId": community.course_id,
+                    "courseCode": course_code,
+                    "assessmentLabel": label,
+                    "markUploadId": mark_upload.id,
+                    "announcementId": announcement.id,
+                    "deepLink": f"/courses/{community.course_id}",
+                },
+            )
 
     await db.commit()
+
+    if updated == 0:
+        raise ValidationError(
+            message=(
+                "No official marks were applied. Use recognized roll and marks columns (e.g. Role Number, rollNumber, "
+                "CT1/CT2, or Marks / 20), and ensure roll numbers match students enrolled in this classroom."
+            ),
+            details=err_items[:30],
+            code="MARKS_ZERO_UPDATES",
+        )
+
     await emit_course_analytics_updated(community.course_id)
     await emit_community_updated(community_id, community.course_id)
 

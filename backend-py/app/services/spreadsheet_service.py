@@ -32,7 +32,16 @@ class ParseResult:
     errors: list[ParseError] = field(default_factory=list)
 
 
-_ROLL_NAMES = {"rollnumber", "roll_number", "roll", "studentid", "student_id", "id"}
+_ROLL_NAMES = {
+    "rollnumber",
+    "roll_number",
+    "role_number",  # e.g. "Role Number"
+    "rolenumber",
+    "roll",
+    "studentid",
+    "student_id",
+    "id",
+}
 _SCORE_MAP: dict[str, str] = {
     "ct1": "ct_score1", "ctscore1": "ct_score1", "ct_score_1": "ct_score1",
     "ct2": "ct_score2", "ctscore2": "ct_score2", "ct_score_2": "ct_score2",
@@ -44,7 +53,30 @@ _GENERIC_SCORE_KEYS = ("mark", "marks", "score", "total", "obtained", "value", "
 
 
 def _norm(h: str) -> str:
-    return re.sub(r"[\s\-]+", "_", h.strip().lower())
+    """Normalize header labels for matching (slashes as in ``Marks / 20`` → ``marks_20``)."""
+    return re.sub(r"[\s\-/]+", "_", h.strip().lower())
+
+
+def _append_marks_out_of_columns(header_map: dict[str, str], score_mapping: list[tuple[str, str]]) -> None:
+    """Map ``Marks / N`` style columns to ct_score1..3 by descending N (first / highest max → CT1)."""
+    used_targets = {t for _, t in score_mapping}
+    candidates: list[tuple[int, str, str]] = []
+    for nk, oh in header_map.items():
+        m = re.match(r"^marks_(\d+)$", nk)
+        if m:
+            candidates.append((int(m.group(1)), nk, oh))
+    candidates.sort(key=lambda x: -x[0])
+    fields = ["ct_score1", "ct_score2", "ct_score3"]
+    fi = 0
+    for _pts, _nk, oh in candidates:
+        while fi < len(fields) and fields[fi] in used_targets:
+            fi += 1
+        if fi >= len(fields):
+            break
+        tgt = fields[fi]
+        score_mapping.append((oh, tgt))
+        used_targets.add(tgt)
+        fi += 1
 
 
 def infer_assessment_field_from_label(label: str | None) -> str | None:
@@ -113,6 +145,8 @@ def _parse_rows(rows: list[dict], assessment_field: str | None = None) -> ParseR
 
     score_mapping: list[tuple[str, str]] = [(header_map[k], v) for k, v in _SCORE_MAP.items() if k in header_map]
 
+    _append_marks_out_of_columns(header_map, score_mapping)
+
     if not score_mapping and assessment_field:
         gen_key = next((k for k in _GENERIC_SCORE_KEYS if k in header_map), None)
         if gen_key:
@@ -147,6 +181,8 @@ def _parse_rows(rows: list[dict], assessment_field: str | None = None) -> ParseR
         roll_norm = _normalize_roll(roll_value)
 
         if not roll_norm:
+            if all(str(row_data.get(h, "") or "").strip() == "" for h in headers):
+                continue
             errors.append(ParseError(row=row_num, reason="Missing roll number"))
             continue
 
