@@ -36,11 +36,11 @@ vi.mock('../../src/lib/api', () => ({
 
 vi.mock('../../src/stores/auth.store', () => ({
   useAuthStore: Object.assign(
-    vi.fn(() => ({ user: { id: 'u1', name: 'Test' } })),
+    vi.fn(() => ({ user: { id: 'u1', name: 'Test', role: 'STUDENT' } })),
     {
       getState: vi.fn(() => ({
         accessToken: 'mock-token',
-        user: { id: 'u1', name: 'Test' },
+        user: { id: 'u1', name: 'Test', role: 'STUDENT' },
       })),
     }
   ),

@@ -50,9 +50,14 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const { data } = await api.post('/auth/login', { email, password });
-      login(data.data.user, data.data.accessToken, data.data.refreshToken);
+      const me = data.data.user;
+      login(me, data.data.accessToken, data.data.refreshToken);
       toast.success('Welcome back!');
-      navigate('/routine');
+      if (me.role === 'ADMIN') {
+        navigate('/admin/users');
+      } else {
+        navigate('/routine');
+      }
     } catch (err: any) {
       const details = err.response?.data?.error?.details;
       const code = err.response?.data?.error?.code;

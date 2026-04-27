@@ -71,3 +71,24 @@ async def test_get_course_detail_not_found(client: AsyncClient) -> None:
     r = await client.get(f"{BASE}/nonexistent-id", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 404
     assert r.json()["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_student_create_topic_is_personal(client: AsyncClient) -> None:
+    """Enrolled students may create topics; API stores them as personal (not shared schedule)."""
+    token = await _get_token(client)
+    r = await client.get(f"{BASE}/my-courses", headers={"Authorization": f"Bearer {token}"})
+    if r.status_code != 200:
+        pytest.skip("my-courses unavailable")
+    data = r.json().get("data") or []
+    if not data:
+        pytest.skip("No enrolled courses for seed student")
+    course_id = data[0]["id"]
+    r2 = await client.post(
+        f"{BASE}/{course_id}/topics",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"title": "Student personal note", "status": "IN_PROGRESS"},
+    )
+    assert r2.status_code == 201
+    body = r2.json().get("data") or {}
+    assert body.get("isPersonal") is True

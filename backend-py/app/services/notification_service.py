@@ -1,5 +1,20 @@
 from __future__ import annotations
 
+"""Low-level notification persistence and socket fan-out.
+
+Callers are responsible for **role-appropriate targeting** (see also ``notifications_service``,
+``notification_worker``, ``community_service``, ``courses_service``):
+
+- **Student-only:** enrollment-based class/lab reminders with ``attendancePrompt``,
+  post-class prompts, 11 PM follow-ups, absent alerts, class-response submissions,
+  course material prompts from ``_notify_course_students``, marks uploads, classroom
+  announcements (recipients are classroom student members only).
+- **Tutor / admin (teaching context):** teaching reminders tied to ``CommunityRole.TUTOR``,
+  and ``MATERIAL_UPLOAD_PROMPT`` when a student submits a class response for tutors to act on.
+
+This module does not infer roles; it only dedupes on ``notificationKey`` and stores rows.
+"""
+
 import logging
 
 from sqlalchemy import func, select
@@ -50,15 +65,9 @@ async def create_notification(
     # Fire-and-forget — don't let socket errors abort the request.
     try:
         from app.core.socket import sio
+        from app.services.notifications_service import get_visible_unread_count
 
-        unread_count: int = (
-            await db.execute(
-                select(func.count()).select_from(Notification).where(
-                    Notification.user_id == user_id,
-                    Notification.is_read.is_(False),
-                )
-            )
-        ).scalar_one()
+        unread_count = await get_visible_unread_count(db, user_id, sync_reminders=False)
 
         room = f"user:{user_id}"
         await sio.emit(

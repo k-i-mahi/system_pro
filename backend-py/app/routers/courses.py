@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.core import response as resp
-from app.core.deps import CurrentUserIdDep, DBDep, get_current_user_id, require_role
+from app.core.deps import CurrentUserIdDep, DBDep, StudentUserIdDep, get_current_user_id, require_role
 from app.core.exceptions import ValidationError
 from app.core.rate_limit import limiter
 from app.models.enums import Role
@@ -12,6 +12,8 @@ from app.schemas.courses import (
     AddMaterialLinkRequest,
     CoursesQuery,
     CreateTopicRequest,
+    PatchMyLabMarksBody,
+    PatchMyTheoryMarksBody,
     ReorderTopicsRequest,
     UpdateMaterialRequest,
     UpdateTopicRequest,
@@ -63,13 +65,35 @@ async def get_course_detail(course_id: str, db: DBDep, user_id: CurrentUserIdDep
     return resp.success(data)
 
 
+@router.patch("/{course_id}/my-lab-marks")
+async def patch_my_lab_marks(
+    course_id: str,
+    body: PatchMyLabMarksBody,
+    db: DBDep,
+    student_id: StudentUserIdDep,
+) -> JSONResponse:
+    data = await courses_service.patch_my_lab_marks(db, course_id, student_id, body)
+    return resp.success(data)
+
+
+@router.patch("/{course_id}/my-theory-marks")
+async def patch_my_theory_marks(
+    course_id: str,
+    body: PatchMyTheoryMarksBody,
+    db: DBDep,
+    student_id: StudentUserIdDep,
+) -> JSONResponse:
+    data = await courses_service.patch_my_theory_marks(db, course_id, student_id, body)
+    return resp.success(data)
+
+
 @router.post("/{course_id}/topics")
 async def create_topic(
     course_id: str, body: CreateTopicRequest, db: DBDep, user_id: CurrentUserIdDep,
 ) -> JSONResponse:
     # Role-based logic is handled in the service:
-    # - STUDENT  → personal study-log topic + auto-mark attendance
-    # - TUTOR/ADMIN → shared course topic (requires course-manager permission)
+    # - STUDENT → personal topic if enrolled (does not touch attendance)
+    # - TUTOR/ADMIN → shared topic (requires course-manager permission)
     topic = await courses_service.create_topic(db, course_id, body, user_id)
     return resp.created(topic)
 

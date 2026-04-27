@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.services.rag.retriever import (
     RetrievedChunk,
+    _bm25_query_variants,
     _content_fingerprint,
     _lexical_overlap_score,
     _normalize_query,
@@ -114,3 +115,18 @@ def test_rerank_keeps_short_definition_chunk() -> None:
     ]
     selected = _rerank_and_select(chunks, "What does FFT stand for?", 2)
     assert any("FFT is fast" in (c.content or "") for c in selected)
+
+
+def test_bm25_query_variants_include_expansion_for_dvfs() -> None:
+    variants = _bm25_query_variants("Explain DVFS techniques")
+
+    assert len(variants) >= 2
+    assert any("dynamic" in v.lower() and "frequency" in v.lower() for v in variants)
+
+
+def test_query_terms_expand_hmca_alias() -> None:
+    terms = _query_terms("What is HMCA in low power computing?")
+
+    assert "hmca" in terms
+    assert "heterogeneous" in terms
+    assert "architecture" in terms

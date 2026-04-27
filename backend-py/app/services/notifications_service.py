@@ -6,10 +6,11 @@ from datetime import date, datetime, time, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
+from app.core.socket import emit_course_analytics_updated
 from app.models.community import Community, CommunityMember
 from app.models.course import AttendanceRecord, Course, Enrollment, ScheduleSlot
-from app.models.enums import CommunityRole, DayOfWeek, NotificationType
+from app.models.enums import CommunityRole, DayOfWeek, NotificationType, Role
 from app.models.misc import Notification
 from app.models.user import User
 from app.services import notification_service
@@ -69,49 +70,59 @@ async def _existing_daily_reminder_keys(db: AsyncSession, user_id: str, start_of
 
 
 async def _ensure_daily_schedule_reminders(db: AsyncSession, user_id: str) -> None:
+    user = await db.get(User, user_id)
+    if not user:
+        return
+
     today, now, day_enum = _today_context()
     start_of_day = datetime.combine(today, time.min, tzinfo=timezone.utc)
     existing = await _existing_daily_reminder_keys(db, user_id, start_of_day)
     today_iso = today.isoformat()
 
-    student_slots = (
-        await db.execute(
-            select(ScheduleSlot, Course)
-            .join(Course, Course.id == ScheduleSlot.course_id)
-            .join(Enrollment, Enrollment.course_id == ScheduleSlot.course_id)
-            .where(Enrollment.user_id == user_id, ScheduleSlot.day_of_week == day_enum)
-        )
-    ).all()
+    # Student attendance-style prompts: **students only** (never tutors/admins via enrollment alone).
+    if user.role == Role.STUDENT:
+        student_slots = (
+            await db.execute(
+                select(ScheduleSlot, Course)
+                .join(Course, Course.id == ScheduleSlot.course_id)
+                .join(Enrollment, Enrollment.course_id == ScheduleSlot.course_id)
+                .where(Enrollment.user_id == user_id, ScheduleSlot.day_of_week == day_enum)
+            )
+        ).all()
 
-    for slot, course in student_slots:
-        reminder_key = f"student:{today_iso}:{slot.id}"
-        if reminder_key in existing:
-            continue
-        notif_type = NotificationType.LAB_REMINDER if slot.type.value == "LAB" else NotificationType.CLASS_REMINDER
-        await notification_service.create_notification(
-            db=db,
-            user_id=user_id,
-            type=notif_type,
-            title=f"Today's {slot.type.value.title()}: {course.course_code} at {slot.start_time}",
-            body=(
-                f"Attend {course.course_code} today and submit what topic was covered. "
-                "If materials are needed, request them in your response."
-            ),
-            metadata={
-                "slotId": slot.id,
-                "courseId": course.id,
-                "courseCode": course.course_code,
-                "courseName": course.course_name,
-                "startTime": slot.start_time,
-                "endTime": slot.end_time,
-                "room": slot.room,
-                "reminderDate": today_iso,
-                "reminderRole": "student",
-                "attendancePrompt": True,
-                "requiresResponse": True,
-                "deepLink": "/notifications",
-            },
-        )
+        for slot, course in student_slots:
+            reminder_key = f"student:{today_iso}:{slot.id}"
+            if reminder_key in existing:
+                continue
+            notif_type = NotificationType.LAB_REMINDER if slot.type.value == "LAB" else NotificationType.CLASS_REMINDER
+            await notification_service.create_notification(
+                db=db,
+                user_id=user_id,
+                type=notif_type,
+                title=f"Today's {slot.type.value.title()}: {course.course_code} at {slot.start_time}",
+                body=(
+                    f"Attend {course.course_code} today and submit what topic was covered. "
+                    "If materials are needed, request them in your response."
+                ),
+                metadata={
+                    "slotId": slot.id,
+                    "courseId": course.id,
+                    "courseCode": course.course_code,
+                    "courseName": course.course_name,
+                    "startTime": slot.start_time,
+                    "endTime": slot.end_time,
+                    "room": slot.room,
+                    "reminderDate": today_iso,
+                    "reminderRole": "student",
+                    "attendancePrompt": True,
+                    "requiresResponse": True,
+                    "deepLink": "/notifications",
+                },
+            )
+
+    # Teaching reminders: tutors and admins who hold **TUTOR** membership on a classroom.
+    if user.role not in (Role.TUTOR, Role.ADMIN):
+        return
 
     tutor_slots = (
         await db.execute(
@@ -171,6 +182,14 @@ def _is_soft_deleted(n: Notification) -> bool:
     return bool(meta.get("deletedByUser"))
 
 
+def _tutor_teaching_reminder_only(n: Notification) -> bool:
+    """Tutor notification feed: upcoming teaching slots only (see product spec)."""
+    meta = n.metadata_ or {}
+    if n.type not in (NotificationType.CLASS_REMINDER, NotificationType.LAB_REMINDER):
+        return False
+    return meta.get("reminderRole") == "tutor"
+
+
 async def _sync_daily_schedule_reminders(db: AsyncSession, user_id: str) -> None:
     """Create today's class/lab rows if missing. Safe to call on list and unread-count."""
     try:
@@ -184,18 +203,36 @@ async def _sync_daily_schedule_reminders(db: AsyncSession, user_id: str) -> None
 async def list_notifications(db: AsyncSession, user_id: str, page: int, limit: int) -> tuple[list[dict], int]:
     await _sync_daily_schedule_reminders(db, user_id)
 
+    user = await db.get(User, user_id)
+
+    if user and user.role == Role.TUTOR:
+        all_rows = (
+            await db.execute(
+                select(Notification)
+                .where(Notification.user_id == user_id)
+                .order_by(Notification.created_at.desc())
+            )
+        ).scalars().all()
+        visible = [n for n in all_rows if not _is_soft_deleted(n) and _tutor_teaching_reminder_only(n)]
+        total = len(visible)
+        offset = (page - 1) * limit
+        page_rows = visible[offset : offset + limit]
+        return [_serialize(n) for n in page_rows], total
+
     offset = (page - 1) * limit
-    rows = (await db.execute(
-        select(Notification)
-        .where(Notification.user_id == user_id)
-        .order_by(Notification.created_at.desc())
-        .offset(offset)
-        .limit(limit + 200)  # over-fetch to account for soft-deleted
-    )).scalars().all()
+    rows = (
+        await db.execute(
+            select(Notification)
+            .where(Notification.user_id == user_id)
+            .order_by(Notification.created_at.desc())
+            .offset(offset)
+            .limit(limit + 200)
+        )
+    ).scalars().all()
     visible = [n for n in rows if not _is_soft_deleted(n)]
-    total = (await db.execute(
-        select(func.count()).select_from(Notification).where(Notification.user_id == user_id)
-    )).scalar_one()
+    total = (
+        await db.execute(select(func.count()).select_from(Notification).where(Notification.user_id == user_id))
+    ).scalar_one()
     return [_serialize(n) for n in visible[:limit]], total
 
 
@@ -241,20 +278,51 @@ async def delete_notification(db: AsyncSession, notif_id: str, user_id: str) -> 
     return {"message": "Notification deleted"}
 
 
+async def get_visible_unread_count(db: AsyncSession, user_id: str, *, sync_reminders: bool = True) -> int:
+    """Unread count for the notification bell: same rules as the list (tutor teaching-only filter).
+
+    When ``sync_reminders`` is False, skip schedule reminder materialization. Use this from code paths
+    that run inside another transaction (sync commits the session and would break batch uploads).
+    """
+    if sync_reminders:
+        await _sync_daily_schedule_reminders(db, user_id)
+
+    user = await db.get(User, user_id)
+    if user and user.role == Role.TUTOR:
+        rows = (
+            await db.execute(
+                select(Notification).where(
+                    Notification.user_id == user_id,
+                    Notification.is_read.is_(False),  # noqa: E712
+                )
+            )
+        ).scalars().all()
+        return sum(
+            1 for n in rows if not _is_soft_deleted(n) and _tutor_teaching_reminder_only(n)
+        )
+
+    return (
+        await db.execute(
+            select(func.count()).select_from(Notification).where(
+                Notification.user_id == user_id,
+                Notification.is_read == False,  # noqa: E712
+            )
+        )
+    ).scalar_one()
+
+
 async def get_unread_count(db: AsyncSession, user_id: str) -> dict:
     # Same materialization as list, so the bell refetches created rows and users see alerts without
     # opening the full notifications page first.
-    await _sync_daily_schedule_reminders(db, user_id)
-
-    count = (await db.execute(
-        select(func.count()).select_from(Notification).where(
-            Notification.user_id == user_id, Notification.is_read == False  # noqa: E712
-        )
-    )).scalar_one()
+    count = await get_visible_unread_count(db, user_id, sync_reminders=True)
     return {"count": count}
 
 
 async def submit_class_response(db: AsyncSession, user_id: str, payload: dict) -> dict:
+    actor = await db.get(User, user_id)
+    if not actor or actor.role != Role.STUDENT:
+        raise ForbiddenError("Class attendance responses are only available to student accounts")
+
     notif = (
         await db.execute(
             select(Notification).where(
@@ -276,9 +344,60 @@ async def submit_class_response(db: AsyncSession, user_id: str, payload: dict) -
         raise ValidationError("Missing slot context in reminder", code="INVALID_NOTIFICATION_METADATA")
 
     action = payload.get("action", "attended")
+    attendance_dt = datetime.fromisoformat(f"{reminder_date}T00:00:00+00:00")
 
-    # ── "I missed class" path ────────────────────────────────────────────────
+    # ── "Class not held" — resolve prompt; drop any row for this occurrence so % stays neutral
+    if action == "class_not_held":
+        slot_ch = await db.get(ScheduleSlot, slot_id)
+        removed = False
+        if slot_ch:
+            existing_ch = (
+                await db.execute(
+                    select(AttendanceRecord).where(
+                        AttendanceRecord.user_id == user_id,
+                        AttendanceRecord.slot_id == slot_id,
+                        AttendanceRecord.date == attendance_dt,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing_ch:
+                await db.delete(existing_ch)
+                removed = True
+        notif.metadata_ = {
+            **metadata,
+            "resolved": True,
+            "classNotHeld": True,
+            "respondedAt": datetime.now(timezone.utc).isoformat(),
+        }
+        notif.is_read = True
+        await db.commit()
+        if removed and slot_ch:
+            await emit_course_analytics_updated(slot_ch.course_id)
+        return {"message": "Marked as class not held — attendance unchanged"}
+
+    slot = await db.get(ScheduleSlot, slot_id)
+    if not slot:
+        raise NotFoundError("Schedule slot not found")
+
+    # ── "I missed class" — record absent ────────────────────────────────────
     if action == "missed":
+        existing_m = (
+            await db.execute(
+                select(AttendanceRecord).where(
+                    AttendanceRecord.user_id == user_id,
+                    AttendanceRecord.slot_id == slot_id,
+                    AttendanceRecord.date == attendance_dt,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_m:
+            existing_m.present = False
+        else:
+            db.add(
+                AttendanceRecord(
+                    user_id=user_id, slot_id=slot_id, date=attendance_dt, present=False
+                )
+            )
         notif.metadata_ = {
             **metadata,
             "resolved": True,
@@ -287,14 +406,10 @@ async def submit_class_response(db: AsyncSession, user_id: str, payload: dict) -
         }
         notif.is_read = True
         await db.commit()
-        return {"message": "Marked as missed class — reminder resolved"}
+        await emit_course_analytics_updated(slot.course_id)
+        return {"message": "Marked as missed class — attendance updated"}
 
     # ── "I attended" path ────────────────────────────────────────────────────
-    attendance_dt = datetime.fromisoformat(f"{reminder_date}T00:00:00+00:00")
-    slot = await db.get(ScheduleSlot, slot_id)
-    if not slot:
-        raise NotFoundError("Schedule slot not found")
-
     existing = (
         await db.execute(
             select(AttendanceRecord).where(
@@ -368,4 +483,5 @@ async def submit_class_response(db: AsyncSession, user_id: str, payload: dict) -
             )
 
     await db.commit()
+    await emit_course_analytics_updated(slot.course_id)
     return {"message": "Class response submitted and attendance recorded"}

@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   BookOpen, Target, Users, TrendingUp,
-  AlertTriangle, Brain, RefreshCw, GraduationCap
+  GraduationCap
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -26,12 +25,6 @@ export default function AnalyticsPage() {
   const { data: myCourses = [] } = useQuery({
     queryKey: ['my-courses'],
     queryFn: () => api.get('/courses/my-courses').then((r) => r.data.data),
-  });
-
-  const { data: suggestions = [] } = useQuery({
-    queryKey: ['analytics-suggestions'],
-    queryFn: () => api.get('/analytics/suggestions').then((r) => r.data.data),
-    enabled: !isTutor,
   });
 
   const { data: courseAnalytics } = useQuery({
@@ -74,54 +67,6 @@ export default function AnalyticsPage() {
           </div>
         ))}
       </div>
-
-      {/* Suggestions — students only */}
-      {!isTutor && suggestions.length > 0 && (
-        <div className="card mb-6">
-          <h2 className="font-semibold mb-4 flex items-center gap-2">
-            <AlertTriangle size={18} className="text-warning" />
-            Study Recommendations
-          </h2>
-          <div className="space-y-2">
-            {suggestions.slice(0, 6).map((s: any) => {
-              const priorityStyles: Record<string, string> = {
-                high: 'border-l-danger bg-red-50/50',
-                medium: 'border-l-warning bg-yellow-50/50',
-                low: 'border-l-primary bg-blue-50/50',
-              };
-              const priorityStyle = priorityStyles[s.priority as string] || '';
-              const Icon = s.type === 'study' ? Brain : RefreshCw;
-              const actionLink = `/ai-tutor?topicId=${s.topicId}&courseId=${s.courseId}`;
-
-              return (
-                <Link
-                  key={`${s.topicId}-${s.type}`}
-                  to={actionLink}
-                  className={`block border-l-4 rounded-r-lg p-3 hover:opacity-80 transition-opacity ${priorityStyle}`}
-                >
-                  <div className="flex items-center gap-3">
-                    <Icon size={18} className="text-text-secondary shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{s.title}</p>
-                      <p className="text-xs text-text-secondary">{s.description}</p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        s.priority === 'high' ? 'bg-red-100 text-red-700' :
-                        s.priority === 'medium' ? 'bg-yellow-100 text-yellow-700' :
-                        'bg-blue-100 text-blue-700'
-                      }`}>
-                        {s.priority}
-                      </span>
-                      <p className="text-xs text-text-muted mt-1">{Math.round(s.expertiseLevel * 100)}%</p>
-                    </div>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* Course selector */}
       <div className="card mb-6">

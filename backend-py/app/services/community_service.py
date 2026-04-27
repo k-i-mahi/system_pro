@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import logging
@@ -11,6 +11,7 @@ from app.core.permissions import ensure_community_manager
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 
 logger = logging.getLogger(__name__)
+
 from app.models.community import (
     Announcement, Community, CommunityMember, MarkUpload, Thread, ThreadLike, ThreadPost
 )
@@ -20,8 +21,52 @@ from app.models.user import User
 from app.services.course_identity import find_course_by_code, normalize_course_code
 from app.services import notification_service
 from app.services.cloudinary_service import upload_file
-from app.services.spreadsheet_service import parse_spreadsheet
-from app.core.socket import emit_course_analytics_updated
+from app.services.spreadsheet_service import (
+    ParsedMarkRow,
+    infer_assessment_field_from_label,
+    parse_marks_spreadsheet,
+)
+from app.core.socket import emit_community_updated, emit_course_analytics_updated
+
+
+def _normalize_join_field(value: str) -> str:
+    """Case-insensitive, strip edges, collapse internal whitespace — reduces join friction."""
+    return " ".join((value or "").split()).casefold()
+
+
+async def _hide_student_only_announcements_from_viewer(
+    db: AsyncSession, community_id: str, viewer_user_id: str
+) -> bool:
+    """Return True if ``student_feed_only`` announcements should be omitted for this viewer.
+
+    Aligns with who can manage a classroom (``ensure_community_manager``): platform admins,
+    the community creator, and members with community role TUTOR must not receive the same
+    student-facing-only feed (e.g. marks-upload copy) that students see.
+
+    Without this, ``Role.ADMIN`` users would bypass the filter (old behavior) even though the
+    frontend treats all admins as ``canManageClassroom`` and shows the tutor announcement UI.
+    Classroom creators who lack a ``CommunityMember`` row (legacy / data issues) are also
+    covered via ``Community.created_by``.
+    """
+    viewer = await db.get(User, viewer_user_id)
+    if viewer and viewer.role == Role.ADMIN:
+        return True
+
+    community = await db.get(Community, community_id)
+    if community and community.created_by == viewer_user_id:
+        return True
+
+    member = (
+        await db.execute(
+            select(CommunityMember).where(
+                CommunityMember.community_id == community_id,
+                CommunityMember.user_id == viewer_user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if member and member.role == CommunityRole.TUTOR:
+        return True
+    return False
 
 
 async def _require_community_manager(db: AsyncSession, community_id: str, user_id: str) -> Community:
@@ -146,9 +191,70 @@ async def get_thread(db: AsyncSession, thread_id: str, user_id: str) -> dict:
     }
 
 
+async def _notify_thread_owner_new_reply(
+    db: AsyncSession, thread: Thread, replier_id: str, post_id: str
+) -> None:
+    if thread.creator_id == replier_id:
+        return
+    owner = await db.get(User, thread.creator_id)
+    if not owner or not owner.notif_chat:
+        return
+    replier = await db.get(User, replier_id)
+    replier_name = replier.name if replier else "Someone"
+    meta: dict = {
+        "notificationKey": f"thread_reply:{post_id}",
+        "kind": "THREAD_REPLY",
+        "threadId": thread.id,
+        "deepLink": f"/community/threads/{thread.id}",
+    }
+    if thread.course_id:
+        meta["courseId"] = thread.course_id
+    await notification_service.create_notification(
+        db,
+        thread.creator_id,
+        NotificationType.MESSAGE,
+        f'{replier_name} replied to your thread',
+        "Open the thread to read the new reply.",
+        metadata=meta,
+    )
+
+
+async def _notify_thread_owner_new_like(db: AsyncSession, thread: Thread, liker_id: str) -> None:
+    if thread.creator_id == liker_id:
+        return
+    owner = await db.get(User, thread.creator_id)
+    if not owner or not owner.notif_chat:
+        return
+    meta: dict = {
+        "notificationKey": f"thread_like:{thread.id}:{liker_id}",
+        "kind": "THREAD_LIKE",
+        "threadId": thread.id,
+        "deepLink": f"/community/threads/{thread.id}",
+    }
+    if thread.course_id:
+        meta["courseId"] = thread.course_id
+    liker = await db.get(User, liker_id)
+    liker_name = liker.name if liker else "Someone"
+    await notification_service.create_notification(
+        db,
+        thread.creator_id,
+        NotificationType.MESSAGE,
+        f"{liker_name} liked your thread",
+        "Someone appreciated your post in the community.",
+        metadata=meta,
+    )
+
+
 async def create_post(db: AsyncSession, thread_id: str, user_id: str, content: str, file_url: str | None) -> dict:
     post = ThreadPost(thread_id=thread_id, author_id=user_id, content=content, file_url=file_url)
     db.add(post)
+    await db.flush()
+    thread = await db.get(Thread, thread_id)
+    if thread:
+        try:
+            await _notify_thread_owner_new_reply(db, thread, user_id, post.id)
+        except Exception:
+            logger.exception("thread reply notification failed for thread %s", thread_id)
     await db.commit()
     await db.refresh(post)
     author = await db.get(User, user_id)
@@ -179,6 +285,13 @@ async def like_thread(db: AsyncSession, thread_id: str, user_id: str) -> dict:
     if existing:
         return {"liked": True, "message": "Already liked"}
     db.add(ThreadLike(thread_id=thread_id, user_id=user_id))
+    await db.flush()
+    thread = await db.get(Thread, thread_id)
+    if thread:
+        try:
+            await _notify_thread_owner_new_like(db, thread, user_id)
+        except Exception:
+            logger.exception("thread like notification failed for thread %s", thread_id)
     await db.commit()
     return {"liked": True}
 
@@ -196,6 +309,9 @@ async def unlike_thread(db: AsyncSession, thread_id: str, user_id: str) -> dict:
 # ── Community CRUD ────────────────────────────────────────────────────────────
 
 async def create_community(db: AsyncSession, user_id: str, data: dict) -> dict:
+    # Classroom course "match" is the same as routine: normalized course code resolves to one
+    # canonical Course row (see find_course_by_code). Community.course_id points at that row,
+    # same as Enrollment after join / routine bulk_create — no separate fuzzy string graph.
     requested_course_code = normalize_course_code(data["courseCode"])
     course = await find_course_by_code(db, requested_course_code)
     if not course:
@@ -260,7 +376,16 @@ async def list_communities(
         user = await db.get(User, user_id)
         university = user.university_name if user else None
         not_member_subq = select(CommunityMember.community_id).where(CommunityMember.user_id == user_id).scalar_subquery()
-        stmt = stmt.where(Community.university == university, Community.id.notin_(not_member_subq))
+        enrolled_course_ids = select(Enrollment.course_id).where(Enrollment.user_id == user_id).scalar_subquery()
+        # Students may see classrooms for courses they are enrolled in even if university string mismatches.
+        if user and user.role == Role.STUDENT:
+            visibility = or_(
+                Community.university == university,
+                Community.course_id.in_(enrolled_course_ids),
+            )
+        else:
+            visibility = Community.university == university
+        stmt = stmt.where(visibility, Community.id.notin_(not_member_subq))
 
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
     communities = (await db.execute(
@@ -330,17 +455,25 @@ async def get_community(db: AsyncSession, community_id: str) -> dict:
     }
 
 
-async def join_community(db: AsyncSession, community_id: str, user_id: str, roll_number: str, session: str, department: str) -> dict:
+async def join_community(
+    db: AsyncSession,
+    community_id: str,
+    user_id: str,
+    roll_number: str,
+    session: str,
+    department: str,
+    university: str,
+) -> dict:
     community = await db.get(Community, community_id)
     if not community:
         raise NotFoundError("Community not found")
 
     user = await db.get(User, user_id)
-    if user and user.university_name != community.university:
+    if _normalize_join_field(university) != _normalize_join_field(community.university):
         raise ForbiddenError("University does not match this classroom")
-    if session != community.session:
+    if _normalize_join_field(session) != _normalize_join_field(community.session):
         raise ForbiddenError("Session does not match this classroom")
-    if department != community.department:
+    if _normalize_join_field(department) != _normalize_join_field(community.department):
         raise ForbiddenError("Department does not match this classroom")
 
     existing = (await db.execute(
@@ -353,6 +486,7 @@ async def join_community(db: AsyncSession, community_id: str, user_id: str, roll
         user.roll_number = roll_number
         user.session = session
         user.department = department
+        user.university_name = community.university
 
     member = CommunityMember(community_id=community_id, user_id=user_id, role=CommunityRole.STUDENT)
     db.add(member)
@@ -365,6 +499,8 @@ async def join_community(db: AsyncSession, community_id: str, user_id: str, roll
 
     await db.commit()
     await db.refresh(member)
+    await emit_community_updated(community_id, community.course_id)
+    await emit_course_analytics_updated(community.course_id)
     return {"id": member.id, "userId": member.user_id, "communityId": member.community_id, "role": member.role, "joinedAt": member.joined_at}
 
 
@@ -373,8 +509,11 @@ async def leave_community(db: AsyncSession, community_id: str, user_id: str) -> 
         select(CommunityMember).where(CommunityMember.community_id == community_id, CommunityMember.user_id == user_id)
     )).scalar_one_or_none()
     if member:
+        comm = await db.get(Community, community_id)
         await db.delete(member)
         await db.commit()
+        if comm:
+            await emit_community_updated(community_id, comm.course_id)
     return {"message": "Left community"}
 
 
@@ -384,8 +523,11 @@ async def remove_member(db: AsyncSession, community_id: str, target_user_id: str
         select(CommunityMember).where(CommunityMember.community_id == community_id, CommunityMember.user_id == target_user_id)
     )).scalar_one_or_none()
     if member:
+        comm = await db.get(Community, community_id)
         await db.delete(member)
         await db.commit()
+        if comm:
+            await emit_community_updated(community_id, comm.course_id)
     return {"message": "Member removed"}
 
 
@@ -423,27 +565,39 @@ async def create_announcement(db: AsyncSession, community_id: str, user_id: str,
     author = await db.get(User, user_id)
     return {
         "id": announcement.id, "title": announcement.title, "body": announcement.body,
-        "fileUrl": announcement.file_url, "communityId": announcement.community_id,
+        "fileUrl": announcement.file_url,
+        "studentFeedOnly": announcement.student_feed_only,
+        "communityId": announcement.community_id,
         "createdAt": announcement.created_at,
         "author": {"id": author.id, "name": author.name, "avatarUrl": author.avatar_url} if author else None,
     }
 
 
-async def list_announcements(db: AsyncSession, community_id: str, page: int, limit: int) -> tuple[list[dict], int]:
-    total = (await db.execute(
-        select(func.count(Announcement.id)).where(Announcement.community_id == community_id)
-    )).scalar_one()
-    announcements = (await db.execute(
-        select(Announcement).where(Announcement.community_id == community_id)
-        .order_by(Announcement.created_at.desc())
-        .offset((page - 1) * limit).limit(limit)
-    )).scalars().all()
+async def list_announcements(
+    db: AsyncSession, community_id: str, viewer_user_id: str, page: int, limit: int
+) -> tuple[list[dict], int]:
+    hide_student_only = await _hide_student_only_announcements_from_viewer(db, community_id, viewer_user_id)
+    filters = [Announcement.community_id == community_id]
+    if hide_student_only:
+        filters.append(Announcement.student_feed_only.is_(False))
+
+    total = (await db.execute(select(func.count(Announcement.id)).where(*filters))).scalar_one()
+    announcements = (
+        await db.execute(
+            select(Announcement)
+            .where(*filters)
+            .order_by(Announcement.created_at.desc())
+            .offset((page - 1) * limit)
+            .limit(limit)
+        )
+    ).scalars().all()
 
     result = []
     for a in announcements:
         author = await db.get(User, a.author_id)
         result.append({
             "id": a.id, "title": a.title, "body": a.body, "fileUrl": a.file_url,
+            "studentFeedOnly": a.student_feed_only,
             "createdAt": a.created_at,
             "author": {"id": author.id, "name": author.name, "avatarUrl": author.avatar_url} if author else None,
         })
@@ -463,97 +617,175 @@ async def delete_announcement(db: AsyncSession, announcement_id: str, user_id: s
 
 # ── Marks ─────────────────────────────────────────────────────────────────────
 
-async def upload_marks(db: AsyncSession, community_id: str, user_id: str, file_data: bytes, filename: str) -> dict:
+def _sanitize_assessment_label(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    s = " ".join(str(raw).strip().split())
+    if len(s) > 80:
+        s = s[:80].rstrip()
+    return s or None
+
+
+def _normalize_roll_key(value: str) -> str:
+    return " ".join((value or "").split()).casefold()
+
+
+def _apply_parsed_marks_to_enrollment(enrollment: Enrollment, row: ParsedMarkRow) -> bool:
+    changed = False
+    for attr in ("ct_score1", "ct_score2", "ct_score3", "lab_score"):
+        val = getattr(row, attr, None)
+        if val is not None:
+            setattr(enrollment, attr, val)
+            changed = True
+    return changed
+
+
+async def upload_marks(
+    db: AsyncSession,
+    community_id: str,
+    user_id: str,
+    file_data: bytes,
+    filename: str,
+    assessment_label: str | None = None,
+) -> dict:
+    """Store marks file, parse CSV/XLSX (Path B — no PDF), update official enrollment scores, notify students."""
     community = await _require_community_manager(db, community_id, user_id)
 
     upload_result = await upload_file(file_data, "mark-uploads")
     secure_url = upload_result["secure_url"]
 
-    parse_result = parse_spreadsheet(file_data, filename)
+    course = await db.get(Course, community.course_id)
+    course_code = course.course_code if course else community.course_code
 
-    if not parse_result.records:
-        mark_upload = MarkUpload(
-            community_id=community_id, uploaded_by=user_id, file_url=secure_url,
-            processed_count=0, error_count=len(parse_result.errors),
-            errors=[{"row": e.row, "rollNumber": e.roll_number, "reason": e.reason} for e in parse_result.errors],
+    label = _sanitize_assessment_label(assessment_label)
+    assessment_field = infer_assessment_field_from_label(label)
+
+    parse_result = parse_marks_spreadsheet(file_data, filename or "upload", assessment_field)
+
+    enroll_rows = (
+        await db.execute(
+            select(Enrollment, User)
+            .join(User, Enrollment.user_id == User.id)
+            .where(
+                Enrollment.course_id == community.course_id,
+                Enrollment.user_id.in_(
+                    select(CommunityMember.user_id).where(
+                        CommunityMember.community_id == community_id,
+                        CommunityMember.role == CommunityRole.STUDENT,
+                    )
+                ),
+            )
         )
-        db.add(mark_upload)
-        await db.commit()
-        return {"upload": {"id": mark_upload.id}, "processed": 0, "updated": 0, "errors": []}
+    ).all()
+
+    roll_to_enrollment: dict[str, Enrollment] = {}
+    for enr, u in enroll_rows:
+        if u.roll_number:
+            roll_to_enrollment[_normalize_roll_key(u.roll_number)] = enr
 
     updated = 0
-    updated_student_ids: set[str] = set()
-    match_errors = []
-
-    for record in parse_result.records:
-        try:
-            student = (await db.execute(
-                select(User).where(User.roll_number == record.roll_number, User.university_name == community.university)
-            )).scalar_one_or_none()
-
-            if not student:
-                match_errors.append({"row": record.row, "rollNumber": record.roll_number, "reason": "No matching student found"})
-                continue
-
-            enrollment = (await db.execute(
-                select(Enrollment).where(Enrollment.user_id == student.id, Enrollment.course_id == community.course_id)
-            )).scalar_one_or_none()
-
-            if not enrollment:
-                match_errors.append({"row": record.row, "rollNumber": record.roll_number, "reason": "Student not enrolled in this course"})
-                continue
-
-            if record.ct_score1 is not None:
-                enrollment.ct_score1 = record.ct_score1
-            if record.ct_score2 is not None:
-                enrollment.ct_score2 = record.ct_score2
-            if record.ct_score3 is not None:
-                enrollment.ct_score3 = record.ct_score3
-            if record.lab_score is not None:
-                enrollment.lab_score = record.lab_score
-
+    unmatched: list[dict] = []
+    for rec in parse_result.records:
+        key = _normalize_roll_key(rec.roll_number)
+        enr = roll_to_enrollment.get(key)
+        if not enr:
+            unmatched.append({"row": rec.row, "rollNumber": rec.roll_number, "reason": "No enrolled student with this roll"})
+            continue
+        if _apply_parsed_marks_to_enrollment(enr, rec):
             updated += 1
-            updated_student_ids.add(student.id)
-        except Exception as exc:
-            logger.warning("Unexpected error processing marks row %s: %s", getattr(record, "row", "?"), exc)
-            match_errors.append({"row": getattr(record, "row", 0), "rollNumber": getattr(record, "roll_number", ""), "reason": "Processing error — row skipped"})
 
-    all_errors = [{"row": e.row, "rollNumber": e.roll_number, "reason": e.reason} for e in parse_result.errors] + match_errors
+    err_items: list[dict] = [
+        {"row": e.row, "rollNumber": e.roll_number, "reason": e.reason} for e in parse_result.errors
+    ]
+    err_items.extend(unmatched)
+
     mark_upload = MarkUpload(
-        community_id=community_id, uploaded_by=user_id, file_url=secure_url,
+        community_id=community_id,
+        uploaded_by=user_id,
+        file_url=secure_url,
         processed_count=len(parse_result.records),
-        error_count=len(all_errors),
-        errors=all_errors if all_errors else None,
+        error_count=len(err_items),
+        errors={"items": err_items[:100]} if err_items else None,
     )
     db.add(mark_upload)
     await db.flush()
 
-    if updated_student_ids:
-        course = await db.get(Course, community.course_id)
-        course_code = course.course_code if course else community.course_code
-        for student_id in updated_student_ids:
-            await notification_service.create_notification(
-                db=db,
-                user_id=student_id,
-                type=NotificationType.ANNOUNCEMENT,
-                title=f"New marks available for {course_code}",
-                body="Your teacher uploaded or updated marks. Open the course details page to see your latest scores.",
-                metadata={
-                    "notificationKey": f"marks_upload:{mark_upload.id}:{student_id}",
-                    "kind": "COURSE_MARKS_UPLOADED",
-                    "communityId": community.id,
-                    "courseId": community.course_id,
-                    "courseCode": course_code,
-                    "markUploadId": mark_upload.id,
-                    "deepLink": f"/courses/{community.course_id}",
-                },
+    if updated > 0:
+        ann_title = f"{course_code} — {label} marks posted" if label else f"{course_code} — marks posted"
+        ann_body = (
+            f"Your instructor recorded official marks{f' for {label}' if label else ''}. "
+            f"Open your course page — My Scores shows instructor-recorded CT/lab marks for {course_code}."
+        )
+    else:
+        ann_title = f"{course_code} — {label} file posted" if label else f"{course_code} — marks file posted"
+        ann_body = (
+            f"Your instructor uploaded a marks file ({filename}){f' for {label}' if label else ''}. "
+            "If scores do not appear yet, check that roll numbers in the file match your profile."
+        )
+
+    announcement = Announcement(
+        community_id=community_id,
+        author_id=user_id,
+        title=ann_title,
+        body=ann_body,
+        file_url=secure_url,
+        student_feed_only=True,
+    )
+    db.add(announcement)
+    await db.flush()
+
+    student_ids = (
+        await db.execute(
+            select(CommunityMember.user_id).where(
+                CommunityMember.community_id == community_id,
+                CommunityMember.role == CommunityRole.STUDENT,
             )
+        )
+    ).scalars().all()
+
+    notif_title = (
+        f"{course_code} {label} marks uploaded! Check your marks!"
+        if label
+        else f"{course_code} marks uploaded! Check your marks!"
+    )
+    notif_body = (
+        f"Official marks{f' for {label}' if label else ''} are on your course page under My Scores."
+        if updated > 0
+        else (
+            f"Your instructor posted a marks file{f' for {label}' if label else ''}. Open your course page for details."
+        )
+    )
+
+    for sid in student_ids:
+        await notification_service.create_notification(
+            db=db,
+            user_id=sid,
+            type=NotificationType.ANNOUNCEMENT,
+            title=notif_title,
+            body=notif_body,
+            metadata={
+                "notificationKey": f"marks_upload:{mark_upload.id}:{sid}",
+                "kind": "CT_MARKS_FILE_UPLOADED",
+                "communityId": community.id,
+                "courseId": community.course_id,
+                "courseCode": course_code,
+                "assessmentLabel": label,
+                "markUploadId": mark_upload.id,
+                "announcementId": announcement.id,
+                "deepLink": f"/courses/{community.course_id}",
+            },
+        )
+
     await db.commit()
-
-    # Notify course room so all students' analytics refresh immediately.
     await emit_course_analytics_updated(community.course_id)
+    await emit_community_updated(community_id, community.course_id)
 
-    return {"upload": {"id": mark_upload.id}, "processed": len(parse_result.records), "updated": updated, "errors": all_errors}
+    return {
+        "upload": {"id": mark_upload.id},
+        "processed": len(parse_result.records),
+        "updated": updated,
+        "errors": err_items[:50],
+    }
 
 
 async def get_marks_history(db: AsyncSession, community_id: str) -> list[dict]:
@@ -575,8 +807,17 @@ async def get_community_scores(db: AsyncSession, community_id: str) -> list[dict
     community = await db.get(Community, community_id)
     if not community:
         raise NotFoundError("Community not found")
+    student_member_ids = (
+        select(CommunityMember.user_id).where(
+            CommunityMember.community_id == community_id,
+            CommunityMember.role == CommunityRole.STUDENT,
+        )
+    ).scalar_subquery()
     enrollments = (await db.execute(
-        select(Enrollment).where(Enrollment.course_id == community.course_id)
+        select(Enrollment).where(
+            Enrollment.course_id == community.course_id,
+            Enrollment.user_id.in_(student_member_ids),
+        )
     )).scalars().all()
     result = []
     for e in enrollments:
@@ -590,6 +831,10 @@ async def get_community_scores(db: AsyncSession, community_id: str) -> list[dict
             "ctScore2": e.ct_score2,
             "ctScore3": e.ct_score3,
             "labScore": e.lab_score,
+            "studentTheoryCt1": e.student_theory_ct1,
+            "studentTheoryCt2": e.student_theory_ct2,
+            "studentTheoryCt3": e.student_theory_ct3,
+            "studentTheoryAssignment": e.student_theory_assignment,
         })
     return result
 
@@ -600,58 +845,13 @@ async def record_attendance(
     db: AsyncSession, community_id: str, user_id: str,
     slot_id: str, date_str: str, records: list[dict],
 ) -> dict:
-    community = await _require_community_manager(db, community_id, user_id)
-
-    attendance_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-    results = []
-
-    for rec in records:
-        try:
-            existing = (await db.execute(
-                select(AttendanceRecord).where(
-                    AttendanceRecord.user_id == rec["userId"],
-                    AttendanceRecord.slot_id == slot_id,
-                    AttendanceRecord.date == attendance_date,
-                )
-            )).scalar_one_or_none()
-
-            if existing:
-                existing.present = rec["present"]
-            else:
-                existing = AttendanceRecord(
-                    user_id=rec["userId"], slot_id=slot_id, date=attendance_date, present=rec["present"]
-                )
-                db.add(existing)
-                await db.flush()
-
-            results.append(existing)
-        except Exception as exc:
-            # Unique constraint violation or other DB error — rollback and re-raise as conflict
-            await db.rollback()
-            logger.warning("Attendance record conflict for user=%s slot=%s date=%s: %s", rec.get("userId"), slot_id, date_str, exc)
-            raise ConflictError("Attendance already recorded for this slot and date. Refresh and try again.") from exc
-
-        if not rec["present"]:
-            await notification_service.create_notification(
-                db, rec["userId"], NotificationType.ATTENDANCE_ALERT,
-                "Marked absent",
-                f"You were marked absent in {community.name} on {attendance_date.strftime('%Y-%m-%d')}",
-                metadata={
-                    "notificationKey": f"absent:{slot_id}:{date_str}:{rec['userId']}",
-                    "communityId": community.id,
-                    "slotId": slot_id,
-                    "date": date_str,
-                },
-            )
-
-    await db.commit()
-
-    # Notify all enrolled students in the course room so their analytics refresh.
-    slot = await db.get(ScheduleSlot, slot_id)
-    if slot:
-        await emit_course_analytics_updated(slot.course_id)
-
-    return {"recorded": len(results)}
+    """Deprecated: roll-call was removed. Attendance comes only from student class notifications."""
+    community = await db.get(Community, community_id)
+    if not community:
+        raise NotFoundError("Community not found")
+    raise ForbiddenError(
+        "Roll-call attendance is no longer available. Students record attendance from their class notifications."
+    )
 
 
 async def get_community_attendance(

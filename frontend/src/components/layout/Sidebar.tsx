@@ -7,10 +7,10 @@ import {
   Bell,
   BarChart3,
   Settings,
-  Shield,
   User,
   LogOut,
-  LayoutDashboard,
+  MessageSquare,
+  Building2,
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth.store';
 import { useUIStore } from '@/stores/ui.store';
@@ -33,22 +33,17 @@ export default function Sidebar() {
 
   const items: NavItem[] = isAdmin(user)
     ? [
-        { to: '/admin', icon: Shield, label: 'Admin Panel' },
-        { to: '/community', icon: Users, label: 'Classrooms' },
-        { to: '/analytics', icon: BarChart3, label: 'Analytics', tour: 'analytics' },
-        { to: '/notifications', icon: Bell, label: 'Notifications' },
-        { to: '/settings', icon: Settings, label: 'Settings' },
-        { to: '/profile', icon: User, label: 'Account' },
+        { to: '/admin/users', icon: Users, label: 'Users' },
+        { to: '/admin/threads', icon: MessageSquare, label: 'Threads' },
+        { to: '/admin/classrooms', icon: Building2, label: 'Classrooms' },
       ]
     : isTutor(user) && !isAdmin(user)
       ? [
-          { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-          { to: '/courses', icon: BookOpen, label: 'Courses', tour: 'courses' },
-          { to: '/community', icon: Users, label: 'Classrooms' },
-          { to: '/analytics', icon: BarChart3, label: 'Analytics', tour: 'analytics' },
+          { to: '/routine', icon: CalendarDays, label: 'My Routine' },
+          { to: '/community', icon: Users, label: 'Classroom' },
           { to: '/notifications', icon: Bell, label: 'Notifications' },
-          { to: '/settings', icon: Settings, label: 'Settings' },
-          { to: '/profile', icon: User, label: 'Account' },
+          { to: '/settings', icon: Settings, label: 'Account' },
+          { to: '/profile', icon: User, label: 'Profile' },
         ]
       : [
           { to: '/routine', icon: CalendarDays, label: 'My Routine' },
@@ -71,8 +66,8 @@ export default function Sidebar() {
   }
 
   function isItemActive(item: NavItem, routeActive: boolean) {
-    if (item.to === '/settings') {
-      return location.pathname === '/settings';
+    if (item.to === '/settings' || item.to === '/profile') {
+      return location.pathname === item.to;
     }
     return routeActive;
   }
@@ -102,6 +97,7 @@ export default function Sidebar() {
           <NavLink
             key={item.to}
             to={item.to}
+            end={item.to.startsWith('/admin/')}
             data-tour={item.tour}
             className={({ isActive }) =>
               cn(

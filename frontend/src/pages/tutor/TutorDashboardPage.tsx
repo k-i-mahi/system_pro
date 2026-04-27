@@ -99,8 +99,8 @@ export default function TutorDashboardPage() {
         <Link to="/community" className="btn-secondary flex items-center gap-2 text-sm">
           <BookOpen size={15} /> Upload Marks
         </Link>
-        <Link to="/analytics" className="btn-secondary flex items-center gap-2 text-sm">
-          <BarChart3 size={15} /> View Analytics
+        <Link to="/analytics/evaluation" className="btn-secondary flex items-center gap-2 text-sm">
+          <BarChart3 size={15} /> Instructor evaluation
         </Link>
       </div>
 

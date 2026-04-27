@@ -34,8 +34,7 @@ const TYPE_META: Record<
 const FILTER_TYPES = [
   { key: '', label: 'All' },
   { key: 'video', label: 'Video' },
-  { key: 'article', label: 'Article' },
-  { key: 'paper', label: 'Paper' },
+  { key: 'article', label: 'Articles & papers' },
   { key: 'blog', label: 'Blog' },
 ] as const;
 

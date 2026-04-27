@@ -45,11 +45,6 @@ interface CourseDetail {
   enrollment?: { id?: string } | null;
 }
 
-const EXPLAIN_PRIMER =
-  'You are an expert tutor. Produce a structured explanation with these sections: ' +
-  '**Intuition**, **Core idea**, **Walkthrough**, **Common pitfalls**, **Quick check**. ' +
-  'Calibrate depth to the learner\'s current mastery; end with exactly one question the learner should try next.';
-
 const CHAT_QUICK_ACTIONS = [
   { label: 'Explain this topic', prompt: 'Explain this topic in detail with examples.' },
   { label: 'Key concepts', prompt: 'What are the key concepts I should know for this topic?' },
@@ -102,6 +97,11 @@ export default function AITutorPage() {
   const selectedTopicObj = useMemo(
     () => courseDetail?.topics?.find((t) => t.id === selectedTopic),
     [courseDetail, selectedTopic]
+  );
+
+  const tutorSessionKey = useMemo(
+    () => `${selectedCourse || 'none'}:${selectedTopic || 'all'}`,
+    [selectedCourse, selectedTopic]
   );
 
   const canAddTopicsOnCoursePage = useMemo(
@@ -203,9 +203,8 @@ export default function AITutorPage() {
           <ul className="space-y-2">
             <li><strong className="text-text-primary">Chat:</strong> agentic tutor with tools (search, code, diagram).</li>
             <li><strong className="text-text-primary">Ask Course:</strong> grounded answers with citations.</li>
-            <li><strong className="text-text-primary">Explain:</strong> structured, mastery-calibrated explanations.</li>
             <li><strong className="text-text-primary">Quiz:</strong> adaptive MCQ practice.</li>
-            <li><strong className="text-text-primary">Resources:</strong> discover videos, articles &amp; papers from the internet.</li>
+            <li><strong className="text-text-primary">Resources:</strong> discover videos, reading, and blogs from the web.</li>
           </ul>
         </div>
       </aside>
@@ -224,6 +223,7 @@ export default function AITutorPage() {
           <div className="card flex flex-1 flex-col overflow-hidden p-0">
             {mode === 'chat' && (
               <ChatPane
+                persistenceKey={`${tutorSessionKey}:chat`}
                 topicId={selectedTopic || undefined}
                 courseId={selectedCourse || undefined}
                 quickActions={CHAT_QUICK_ACTIONS}
@@ -232,25 +232,11 @@ export default function AITutorPage() {
             )}
             {mode === 'ask-course' && (
               <AskCoursePane
+                persistenceKey={`${tutorSessionKey}:ask`}
                 courseId={selectedCourse || undefined}
                 topicId={selectedTopic || undefined}
                 materials={askCourseMaterials}
                 onCitationClick={setPreviewCitation}
-              />
-            )}
-            {mode === 'explain' && (
-              <ChatPane
-                key="explain"
-                topicId={selectedTopic || undefined}
-                courseId={selectedCourse || undefined}
-                systemPrimer={EXPLAIN_PRIMER}
-                emptyStateTitle="Ask for a structured explanation"
-                emptyStateHint="Intuition → Core idea → Walkthrough → Pitfalls → Quick check."
-                initialPrompt={prefillPrompt || undefined}
-                quickActions={[
-                  { label: 'Explain this topic', prompt: 'Please explain this topic from first principles.' },
-                  { label: 'Walk me through the proof', prompt: 'Walk me through the proof step by step.' },
-                ]}
               />
             )}
             {mode === 'quiz' && (

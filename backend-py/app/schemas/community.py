@@ -30,6 +30,7 @@ class JoinCommunityRequest(BaseModel):
     rollNumber: str = Field(min_length=1)
     session: str = Field(min_length=1)
     department: str = Field(min_length=1)
+    university: str = Field(min_length=1, description="Must match this classroom's university string")
 
 
 class CreateAnnouncementRequest(BaseModel):

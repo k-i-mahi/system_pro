@@ -26,20 +26,36 @@ vi.mock('../../src/lib/api', () => ({
   },
 }));
 
-vi.mock('../../src/stores/auth.store', () => ({
-  useAuthStore: Object.assign(
-    vi.fn(() => ({
-      setUser: vi.fn(),
-      user: mockProfile,
-    })),
-    {
-      getState: vi.fn(() => ({
-        user: mockProfile,
-        setUser: vi.fn(),
-      })),
-    }
-  ),
-}));
+vi.mock('../../src/stores/auth.store', () => {
+  const authState = {
+    setUser: vi.fn(),
+    setUserFromMe: vi.fn(),
+    user: {
+      id: 'user-1',
+      name: 'Alex Student',
+      email: 'student@copilot.dev',
+      universityName: 'Demo University',
+      avatarUrl: null,
+      bio: 'A passionate learner.',
+      phone: '+880123456789',
+      role: 'STUDENT',
+    },
+  };
+  return {
+    useAuthStore: Object.assign(
+      vi.fn((selector?: (s: typeof authState) => unknown) => {
+        if (typeof selector === 'function') return selector(authState);
+        return authState;
+      }),
+      {
+        getState: vi.fn(() => ({
+          ...authState,
+          logout: vi.fn(),
+        })),
+      }
+    ),
+  };
+});
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -116,7 +132,7 @@ describe('ProfilePage', () => {
   it('renders bio text', async () => {
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText('A passionate learner.')).toBeInTheDocument();
+      expect(screen.getAllByText('A passionate learner.').length).toBeGreaterThanOrEqual(1);
     });
   });
 

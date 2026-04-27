@@ -163,15 +163,19 @@ async def test_delete_attendance_alert_soft_deletes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_submit_class_response_missed_resolves_without_attendance() -> None:
-    """
-    action='missed': notification is marked resolved+missedClass but NO
-    AttendanceRecord is created and no tutor notification is sent.
-    """
+async def test_submit_class_response_missed_records_absent() -> None:
+    """action='missed': absent AttendanceRecord upserted; analytics emit for course."""
+    from app.models.course import ScheduleSlot
+    from app.models.enums import Role
+    from app.models.user import User
     from app.services import notifications_service
 
     mock_db = AsyncMock()
     mock_db.commit = AsyncMock()
+    mock_db.add = MagicMock()
+
+    actor = MagicMock()
+    actor.role = Role.STUDENT
 
     notif = MagicMock()
     notif.id = "notif-5"
@@ -184,22 +188,213 @@ async def test_submit_class_response_missed_resolves_without_attendance() -> Non
     }
     notif.is_read = False
 
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = notif
-    mock_db.execute = AsyncMock(return_value=mock_result)
+    slot = MagicMock()
+    slot.course_id = "course-1"
 
-    result = await notifications_service.submit_class_response(
-        mock_db,
-        "user-student",
-        {"notificationId": "notif-5", "action": "missed"},
-    )
+    notif_result = MagicMock()
+    notif_result.scalar_one_or_none.return_value = notif
+    absent_result = MagicMock()
+    absent_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(side_effect=[notif_result, absent_result])
 
-    assert result == {"message": "Marked as missed class — reminder resolved"}
-    assert notif.metadata_["resolved"] is True
+    async def mock_get(model, pk):
+        if model is User and pk == "user-student":
+            return actor
+        if model is ScheduleSlot and pk == "slot-99":
+            return slot
+        return None
+
+    mock_db.get = AsyncMock(side_effect=mock_get)
+
+    with patch("app.services.notifications_service.emit_course_analytics_updated", new_callable=AsyncMock) as mock_emit:
+        result = await notifications_service.submit_class_response(
+            mock_db,
+            "user-student",
+            {"notificationId": "notif-5", "action": "missed"},
+        )
+
+    assert result == {"message": "Marked as missed class — attendance updated"}
     assert notif.metadata_["missedClass"] is True
-    assert notif.is_read is True
-    # No attendance record should be created
+    mock_db.add.assert_called_once()
+    mock_emit.assert_awaited_once_with("course-1")
+
+
+@pytest.mark.asyncio
+async def test_submit_class_response_class_not_held_deletes_attendance_row() -> None:
+    """class_not_held removes existing AttendanceRecord for that occurrence and emits analytics."""
+    from app.models.course import AttendanceRecord, ScheduleSlot
+    from app.models.enums import Role
+    from app.models.user import User
+    from app.services import notifications_service
+
+    mock_db = AsyncMock()
+    mock_db.commit = AsyncMock()
+
+    actor = MagicMock()
+    actor.role = Role.STUDENT
+
+    notif = MagicMock()
+    notif.metadata_ = {
+        "attendancePrompt": True,
+        "slotId": "slot-99",
+        "reminderDate": "2025-01-15",
+    }
+    notif.is_read = False
+
+    slot = MagicMock()
+    slot.course_id = "course-z"
+    old_row = MagicMock(spec=AttendanceRecord)
+
+    notif_result = MagicMock()
+    notif_result.scalar_one_or_none.return_value = notif
+    att_result = MagicMock()
+    att_result.scalar_one_or_none.return_value = old_row
+
+    mock_db.execute = AsyncMock(side_effect=[notif_result, att_result])
+
+    async def mock_get(model, pk):
+        if model is User:
+            return actor
+        if model is ScheduleSlot and pk == "slot-99":
+            return slot
+        return None
+
+    mock_db.get = AsyncMock(side_effect=mock_get)
+
+    with patch("app.services.notifications_service.emit_course_analytics_updated", new_callable=AsyncMock) as mock_emit:
+        result = await notifications_service.submit_class_response(
+            mock_db,
+            "user-student",
+            {"notificationId": "notif-ch", "action": "class_not_held"},
+        )
+
+    assert result["message"] == "Marked as class not held — attendance unchanged"
+    assert notif.metadata_["classNotHeld"] is True
+    mock_db.delete.assert_awaited_once_with(old_row)
+    mock_emit.assert_awaited_once_with("course-z")
+
+
+@pytest.mark.asyncio
+async def test_class_not_held_deleting_row_omits_occurrence_from_attendance_percentage() -> None:
+    """
+    If an AttendanceRecord already exists for the (user, slot, date) occurrence, class_not_held
+    deletes it. Course analytics attendancePercentage uses present_count / len(rows) over all
+    AttendanceRecord rows for that user+course; removing that row drops it from both numerator
+    and denominator — the occurrence no longer affects the percentage (neutral inclusion).
+    """
+    from app.models.course import AttendanceRecord, ScheduleSlot
+    from app.models.enums import Role
+    from app.models.user import User
+    from app.services import notifications_service
+
+    def attendance_percentage(present_flags: list[bool]) -> int:
+        n = len(present_flags)
+        return round((sum(1 for p in present_flags if p) / n) * 100) if n else 0
+
+    mock_db = AsyncMock()
+    mock_db.commit = AsyncMock()
+
+    actor = MagicMock()
+    actor.role = Role.STUDENT
+
+    notif = MagicMock()
+    notif.metadata_ = {
+        "attendancePrompt": True,
+        "slotId": "slot-99",
+        "reminderDate": "2025-01-15",
+    }
+    notif.is_read = False
+
+    slot = MagicMock()
+    slot.course_id = "course-z"
+    old_row = MagicMock(spec=AttendanceRecord)
+    old_row.present = False
+
+    notif_result = MagicMock()
+    notif_result.scalar_one_or_none.return_value = notif
+    att_result = MagicMock()
+    att_result.scalar_one_or_none.return_value = old_row
+
+    mock_db.execute = AsyncMock(side_effect=[notif_result, att_result])
+
+    async def mock_get(model, pk):
+        if model is User:
+            return actor
+        if model is ScheduleSlot and pk == "slot-99":
+            return slot
+        return None
+
+    mock_db.get = AsyncMock(side_effect=mock_get)
+
+    with patch("app.services.notifications_service.emit_course_analytics_updated", new_callable=AsyncMock):
+        await notifications_service.submit_class_response(
+            mock_db,
+            "user-student",
+            {"notificationId": "notif-ch-pct", "action": "class_not_held"},
+        )
+
+    mock_db.delete.assert_awaited_once_with(old_row)
+
+    # Same formula as analytics_service._course_analytics_student for this student's rows.
+    # Suppose rows were present/absent/present and the middle row was this occurrence (absent):
+    before_flags = [True, old_row.present, True]
+    assert attendance_percentage(before_flags) == 67
+    after_flags = [before_flags[0], before_flags[2]]
+    assert attendance_percentage(after_flags) == 100
+    assert len(after_flags) == len(before_flags) - 1
+
+
+@pytest.mark.asyncio
+async def test_submit_class_response_class_not_held_no_row_skips_emit() -> None:
+    """
+    No prior AttendanceRecord for this occurrence: class_not_held must not add or delete
+    any attendance row, so analytics present_count and total (hence percentage) stay the same.
+    """
+    from app.models.course import ScheduleSlot
+    from app.models.enums import Role
+    from app.models.user import User
+    from app.services import notifications_service
+
+    mock_db = AsyncMock()
+    mock_db.commit = AsyncMock()
+    mock_db.add = MagicMock()
+    actor = MagicMock()
+    actor.role = Role.STUDENT
+    notif = MagicMock()
+    notif.metadata_ = {
+        "attendancePrompt": True,
+        "slotId": "slot-99",
+        "reminderDate": "2025-01-15",
+    }
+    notif.is_read = False
+    slot = MagicMock()
+    slot.course_id = "course-z"
+
+    notif_result = MagicMock()
+    notif_result.scalar_one_or_none.return_value = notif
+    att_result = MagicMock()
+    att_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(side_effect=[notif_result, att_result])
+
+    async def mock_get(model, pk):
+        if model is User:
+            return actor
+        if model is ScheduleSlot and pk == "slot-99":
+            return slot
+        return None
+
+    mock_db.get = AsyncMock(side_effect=mock_get)
+
+    with patch("app.services.notifications_service.emit_course_analytics_updated", new_callable=AsyncMock) as mock_emit:
+        await notifications_service.submit_class_response(
+            mock_db,
+            "user-student",
+            {"notificationId": "notif-ch2", "action": "class_not_held"},
+        )
+
     mock_db.add.assert_not_called()
+    mock_db.delete.assert_not_awaited()
+    mock_emit.assert_not_called()
 
 
 @pytest.mark.asyncio

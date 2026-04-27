@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CommunityPage from '../../src/pages/community/CommunityPage';
 
@@ -47,6 +47,26 @@ const mockThreadDetail = {
   _count: { posts: 1, likes: 5 },
 };
 
+vi.mock('../../src/stores/auth.store', () => {
+  const state = {
+    user: { id: 'u1', name: 'Alex Student', role: 'STUDENT', email: 'student@test.edu' },
+  };
+  return {
+    useAuthStore: Object.assign(
+      vi.fn((selector?: (s: typeof state) => unknown) => {
+        if (typeof selector === 'function') return selector(state);
+        return state;
+      }),
+      {
+        getState: vi.fn(() => ({
+          ...state,
+          logout: vi.fn(),
+        })),
+      }
+    ),
+  };
+});
+
 vi.mock('../../src/lib/api', () => ({
   default: {
     get: vi.fn((url: string, opts?: any) => {
@@ -63,14 +83,17 @@ vi.mock('../../src/lib/api', () => ({
   },
 }));
 
-function renderPage() {
+function renderPage(initialPath = '/community') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <CommunityPage />
+      <MemoryRouter initialEntries={[initialPath]}>
+        <Routes>
+          <Route path="/community" element={<CommunityPage />} />
+          <Route path="/community/threads/:threadId" element={<CommunityPage />} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>
   );

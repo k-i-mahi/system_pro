@@ -13,13 +13,14 @@ from app.core.timezones import user_timezone
 from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.models.community import Community, CommunityMember
 from app.models.course import AttendanceRecord, Course, Enrollment, Material, ScheduleSlot, Topic, TopicProgress
-from app.models.enums import CommunityRole, DayOfWeek, IngestStatus, MaterialType, NotificationType, OcrQuality, Role, TopicStatus
-from app.models.misc import Notification
+from app.models.enums import CommunityRole, CourseType, DayOfWeek, IngestStatus, MaterialType, NotificationType, OcrQuality, Role, TopicStatus
 from app.models.user import User
 from app.schemas.courses import (
     AddMaterialLinkRequest,
     CoursesQuery,
     CreateTopicRequest,
+    PatchMyLabMarksBody,
+    PatchMyTheoryMarksBody,
     ReorderTopicsRequest,
     UpdateMaterialRequest,
     UpdateTopicRequest,
@@ -30,6 +31,18 @@ from app.services.ingest_service import ingest_material_resilient
 from app.workers.queues import enqueue_ingest
 
 logger = logging.getLogger(__name__)
+
+
+def _course_type_api_str(course_type: CourseType | str | None) -> str:
+    """Stable JSON string for clients (always ``THEORY`` or ``LAB``)."""
+    if course_type is None:
+        return CourseType.THEORY.value
+    if isinstance(course_type, CourseType):
+        return course_type.value
+    s = str(course_type).strip().upper()
+    if s == CourseType.LAB.value:
+        return CourseType.LAB.value
+    return CourseType.THEORY.value
 
 
 def _ingest_background_done(task: asyncio.Task) -> None:
@@ -73,12 +86,29 @@ async def _run_ingest_local(material_id: str, user_id: str, quality: str) -> Non
     task.add_done_callback(_ingest_background_done)
 
 
+def _student_lab_marks_dict(enr: Enrollment) -> dict:
+    return {
+        "labTest": enr.student_lab_test,
+        "labQuiz": enr.student_lab_quiz,
+        "assignment": enr.student_lab_assignment,
+    }
+
+
+def _student_theory_marks_dict(enr: Enrollment) -> dict:
+    return {
+        "classTest1": enr.student_theory_ct1,
+        "classTest2": enr.student_theory_ct2,
+        "classTest3": enr.student_theory_ct3,
+        "assignment": enr.student_theory_assignment,
+    }
+
+
 def _course_to_dict(c: Course) -> dict:
     return {
         "id": c.id,
         "courseCode": c.course_code,
         "courseName": c.course_name,
-        "courseType": c.course_type,
+        "courseType": _course_type_api_str(c.course_type),
         "category": c.category,
         "level": c.level,
         "thumbnail": c.thumbnail,
@@ -112,76 +142,6 @@ _PY_DOW_MAP: dict[int, DayOfWeek] = {
     0: DayOfWeek.MON, 1: DayOfWeek.TUE, 2: DayOfWeek.WED,
     3: DayOfWeek.THU, 4: DayOfWeek.FRI, 5: DayOfWeek.SAT, 6: DayOfWeek.SUN,
 }
-
-
-async def _auto_mark_attendance(db: AsyncSession, user_id: str, course_id: str) -> None:
-    """Called when a student adds a personal topic. If the course has a class
-    scheduled today in the student's OWN timezone, upserts an AttendanceRecord.
-    The unique constraint on (userId, slotId, date) guarantees a student adding
-    multiple topics in one session still counts as exactly ONE class attended.
-
-    Uses the student's timezone so a student in UTC+6 logging at 00:30 local
-    Monday correctly matches Monday's slot, not Sunday's UTC slot.
-    """
-    user = await db.get(User, user_id)
-    if not user:
-        return
-
-    tz = user_timezone(user)
-    local_now = datetime.now(timezone.utc).astimezone(tz)
-    local_today = local_now.date()
-    today_dow = _PY_DOW_MAP[local_today.weekday()]
-    # Store attendance date as midnight UTC of the user's local date so it aligns
-    # with what the post-class worker writes (also local-date midnight UTC).
-    attendance_dt = datetime.combine(local_today, time.min, tzinfo=timezone.utc)
-
-    slot = (await db.execute(
-        select(ScheduleSlot).where(
-            ScheduleSlot.course_id == course_id,
-            ScheduleSlot.day_of_week == today_dow,
-        )
-    )).scalar_one_or_none()
-
-    if not slot:
-        return  # No class scheduled today for this course
-
-    existing = (await db.execute(
-        select(AttendanceRecord).where(
-            AttendanceRecord.user_id == user_id,
-            AttendanceRecord.slot_id == slot.id,
-            AttendanceRecord.date == attendance_dt,
-        )
-    )).scalar_one_or_none()
-
-    if not existing:
-        db.add(AttendanceRecord(
-            user_id=user_id,
-            slot_id=slot.id,
-            date=attendance_dt,
-            present=True,
-        ))
-
-    # Resolve any pending post-class attendance-prompt notifications for this slot
-    # so the student doesn't see a stale "I attended / I missed class" prompt, and
-    # the 11 PM follow-up worker skips this student tonight.
-    pending_notifs = (await db.execute(
-        select(Notification).where(
-            Notification.user_id == user_id,
-            Notification.type.in_([NotificationType.CLASS_REMINDER, NotificationType.LAB_REMINDER]),
-        )
-    )).scalars().all()
-    today_iso = local_today.isoformat()
-    for notif in pending_notifs:
-        meta = notif.metadata_ or {}
-        if (
-            meta.get("attendancePrompt")
-            and meta.get("slotId") == slot.id
-            and meta.get("reminderDate") == today_iso
-            and not meta.get("resolved")
-            and not meta.get("classResponse")
-        ):
-            notif.metadata_ = {**meta, "resolved": True, "autoResolved": True}
-            notif.is_read = True
 
 
 def _material_to_dict(m: Material) -> dict:
@@ -252,7 +212,7 @@ async def _is_course_material_editor(db: AsyncSession, course_id: str, user_id: 
 async def _require_topic_student_owner_or_editor(
     db: AsyncSession, course_id: str, topic_id: str, user_id: str
 ) -> Topic:
-    """Classroom owner or admin: shared topics. Enrolled student: only personal topics they created."""
+    """Classroom owner or admin: shared topics. Students may edit only their own personal topics."""
     topic = await _require_topic(db, course_id, topic_id)
     if await _is_course_material_editor(db, course_id, user_id):
         return topic
@@ -262,24 +222,11 @@ async def _require_topic_student_owner_or_editor(
             "Only the instructor who created the classroom for this course can edit the shared class schedule. "
             "Co-tutors should add materials from the classroom."
         )
-    if not user or user.role != Role.STUDENT:
-        raise ForbiddenError("You don't have permission to change this topic or its materials.")
-    enr = (
-        await db.execute(
-            select(Enrollment.id).where(
-                Enrollment.user_id == user_id,
-                Enrollment.course_id == course_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if not enr:
-        raise ForbiddenError("You are not enrolled in this course.")
-    if topic.is_personal and topic.created_by == user_id:
-        return topic
-    raise ForbiddenError(
-        "You can only add or edit materials on your own study topics. "
-        'Use "Add Topic" or "Log Topic" to create one, then upload files there.'
-    )
+    if user and user.role == Role.STUDENT:
+        if topic.is_personal and topic.created_by == user_id:
+            return topic
+        raise ForbiddenError("Only instructors can change shared course topics and materials.")
+    raise ForbiddenError("You don't have permission to change this topic or its materials.")
 
 
 async def _require_reingest_access(db: AsyncSession, course_id: str, user_id: str) -> None:
@@ -600,15 +547,15 @@ async def get_course_detail(db: AsyncSession, course_id: str, user_id: str | Non
     if not course:
         raise NotFoundError("Course not found")
 
-    # Shared topics: is_personal=False → visible to all
-    # Personal topics: is_personal=True → visible only to their creator
+    # Shared topics for everyone; enrolled students also see their own personal topics.
+    topic_visibility = Topic.is_personal == False  # noqa: E712
     if user_id:
-        topic_visibility = or_(
-            Topic.is_personal == False,  # noqa: E712
-            and_(Topic.is_personal == True, Topic.created_by == user_id),  # noqa: E712
-        )
-    else:
-        topic_visibility = Topic.is_personal == False  # noqa: E712
+        viewer = await db.get(User, user_id)
+        if viewer and viewer.role == Role.STUDENT:
+            topic_visibility = or_(
+                Topic.is_personal == False,  # noqa: E712
+                and_(Topic.is_personal == True, Topic.created_by == user_id),  # noqa: E712
+            )
 
     topics_result = await db.execute(
         select(Topic)
@@ -682,12 +629,15 @@ async def get_course_detail(db: AsyncSession, course_id: str, user_id: str | Non
                 "ctScore3": enr.ct_score3,
                 "labScore": enr.lab_score,
             }
+            if course.course_type == CourseType.LAB:
+                enrollment["studentLabMarks"] = _student_lab_marks_dict(enr)
+            elif course.course_type == CourseType.THEORY:
+                enrollment["studentTheoryMarks"] = _student_theory_marks_dict(enr)
 
     teaching_context = await _teaching_context(db, course_id, user_id)
     material_count = sum(len(topic["materials"]) for topic in topics_data)
 
-    # Today's attendance status for the current student — use their own timezone
-    # so the "today" slot matches what the worker and study-log code use.
+    # Today's attendance status for the current student (notification-driven records).
     today_attendance: dict | None = None
     if user_id and enrollment:
         viewer = await db.get(User, user_id)
@@ -734,28 +684,87 @@ async def get_course_detail(db: AsyncSession, course_id: str, user_id: str | Non
     }
 
 
+async def patch_my_lab_marks(
+    db: AsyncSession,
+    course_id: str,
+    user_id: str,
+    body: PatchMyLabMarksBody,
+) -> dict:
+    course = await db.get(Course, course_id)
+    if not course:
+        raise NotFoundError("Course not found")
+    if course.course_type != CourseType.LAB:
+        raise ValidationError("Self-managed lab marks are only available for lab courses.")
+
+    enr = (
+        await db.execute(
+            select(Enrollment).where(Enrollment.course_id == course_id, Enrollment.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if not enr:
+        raise ForbiddenError("You are not enrolled in this course.")
+
+    patch = body.model_dump(exclude_unset=True)
+    if not patch:
+        return {"studentLabMarks": _student_lab_marks_dict(enr)}
+
+    key_to_attr = {
+        "labTest": "student_lab_test",
+        "labQuiz": "student_lab_quiz",
+        "assignment": "student_lab_assignment",
+    }
+    for json_key, value in patch.items():
+        setattr(enr, key_to_attr[json_key], value)
+
+    await db.commit()
+    await db.refresh(enr)
+    return {"studentLabMarks": _student_lab_marks_dict(enr)}
+
+
+async def patch_my_theory_marks(
+    db: AsyncSession,
+    course_id: str,
+    user_id: str,
+    body: PatchMyTheoryMarksBody,
+) -> dict:
+    course = await db.get(Course, course_id)
+    if not course:
+        raise NotFoundError("Course not found")
+    if course.course_type != CourseType.THEORY:
+        raise ValidationError("Self-managed theory marks are only available for theory courses.")
+
+    enr = (
+        await db.execute(
+            select(Enrollment).where(Enrollment.course_id == course_id, Enrollment.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if not enr:
+        raise ForbiddenError("You are not enrolled in this course.")
+
+    patch = body.model_dump(exclude_unset=True)
+    if not patch:
+        return {"studentTheoryMarks": _student_theory_marks_dict(enr)}
+
+    key_to_attr = {
+        "classTest1": "student_theory_ct1",
+        "classTest2": "student_theory_ct2",
+        "classTest3": "student_theory_ct3",
+        "assignment": "student_theory_assignment",
+    }
+    for json_key, value in patch.items():
+        setattr(enr, key_to_attr[json_key], value)
+
+    await db.commit()
+    await db.refresh(enr)
+    return {"studentTheoryMarks": _student_theory_marks_dict(enr)}
+
+
 # ── Topics ────────────────────────────────────────────────────────────────────
 
 async def create_topic(db: AsyncSession, course_id: str, body: CreateTopicRequest, user_id: str) -> dict:
     user = await db.get(User, user_id)
     if not user:
         raise NotFoundError("User not found")
-
-    is_student_role = user.role == Role.STUDENT
-
-    if is_student_role:
-        # Students may only add personal study-log topics to courses they are enrolled in.
-        enrolled = (await db.execute(
-            select(Enrollment).where(
-                Enrollment.user_id == user_id,
-                Enrollment.course_id == course_id,
-            )
-        )).scalar_one_or_none()
-        if not enrolled:
-            raise ForbiddenError("You are not enrolled in this course")
-    else:
-        # Tutors/Admins: check they actually manage this course.
-        await _require_course_manager(db, course_id, user_id)
 
     await _require_course(db, course_id)
 
@@ -766,6 +775,34 @@ async def create_topic(db: AsyncSession, course_id: str, body: CreateTopicReques
     max_order = max_result.scalar_one_or_none() or -1
     order_index = body.orderIndex if body.orderIndex is not None else max_order + 1
 
+    if user.role == Role.STUDENT:
+        enr = (
+            await db.execute(
+                select(Enrollment).where(Enrollment.course_id == course_id, Enrollment.user_id == user_id)
+            )
+        ).scalar_one_or_none()
+        if not enr:
+            raise ForbiddenError("Enroll in this course to add personal topics.")
+        topic = Topic(
+            course_id=course_id,
+            title=body.title,
+            description=body.description,
+            week_number=body.weekNumber,
+            session_date=body.sessionDate or datetime.now(timezone.utc),
+            order_index=order_index,
+            status=body.status,
+            is_personal=True,
+            created_by=user_id,
+        )
+        db.add(topic)
+        await db.commit()
+        await db.refresh(topic)
+        result = _topic_to_dict(topic)
+        result["materials"] = []
+        return result
+
+    await _require_course_manager(db, course_id, user_id)
+
     topic = Topic(
         course_id=course_id,
         title=body.title,
@@ -774,16 +811,10 @@ async def create_topic(db: AsyncSession, course_id: str, body: CreateTopicReques
         session_date=body.sessionDate or datetime.now(timezone.utc),
         order_index=order_index,
         status=body.status,
-        is_personal=is_student_role,
-        created_by=user_id if is_student_role else None,
+        is_personal=False,
+        created_by=None,
     )
     db.add(topic)
-
-    # For students: auto-mark attendance if there is a class scheduled today.
-    # Adding multiple topics on the same day still counts as ONE attendance because
-    # the UniqueConstraint(userId, slotId, date) on AttendanceRecord prevents duplicates.
-    if is_student_role:
-        await _auto_mark_attendance(db, user_id, course_id)
 
     await db.commit()
     await db.refresh(topic)
@@ -820,6 +851,13 @@ async def update_topic(db: AsyncSession, course_id: str, topic_id: str, body: Up
 
 
 async def delete_topic(db: AsyncSession, topic_id: str) -> None:
+    """
+    Delete a topic and its materials. **Cloudinary-first policy:** for each material with
+    ``public_id``, we call ``destroy_public_id_strict`` (retry, fail closed). Only after
+    all remote assets are removed (or confirmed absent) do we delete the topic row
+    (CASCADE removes materials and embeddings). LINK materials have no ``public_id``
+    and skip remote deletion.
+    """
     result = await db.execute(select(Topic).where(Topic.id == topic_id))
     topic = result.scalar_one_or_none()
     if not topic:
@@ -830,10 +868,7 @@ async def delete_topic(db: AsyncSession, topic_id: str) -> None:
     ).scalars().all()
     for material in materials:
         if material.public_id:
-            try:
-                await cloudinary_service.delete_file(material.public_id)
-            except Exception:
-                logger.warning("Cloudinary delete failed for %s", material.public_id)
+            await cloudinary_service.destroy_public_id_strict(material.public_id)
     await db.delete(topic)
     await db.commit()
 
@@ -993,13 +1028,15 @@ async def update_material(
 
 
 async def delete_material(db: AsyncSession, topic_id: str, material_id: str) -> None:
+    """
+    Delete one material. **Fail closed:** if ``public_id`` is set, Cloudinary must report
+    ``ok`` or ``not found`` before the DB row is removed; otherwise the API returns 503
+    and the row remains (operator can retry or clean Cloudinary manually).
+    """
     material = await _require_material(db, topic_id, material_id)
 
     if material.public_id:
-        try:
-            await cloudinary_service.delete_file(material.public_id)
-        except Exception:
-            logger.warning("Cloudinary delete failed for %s", material.public_id)
+        await cloudinary_service.destroy_public_id_strict(material.public_id)
 
     await db.delete(material)
     await db.commit()

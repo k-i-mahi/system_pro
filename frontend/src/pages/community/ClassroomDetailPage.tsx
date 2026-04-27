@@ -12,7 +12,6 @@ import {
   FileSpreadsheet,
   CheckCircle,
   XCircle,
-  CalendarCheck,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import api from '@/lib/api';
@@ -29,26 +28,6 @@ type Announcement = {
   body: string;
   createdAt: string;
   author?: { name?: string };
-};
-
-type CommunityScore = {
-  userId: string;
-  name: string;
-  rollNumber?: string | null;
-  ctScore1?: number | null;
-  ctScore2?: number | null;
-  ctScore3?: number | null;
-  labScore?: number | null;
-};
-
-type MarkUploadHistory = {
-  id: string;
-  processedCount: number;
-  errorCount: number;
-  errors?: { row?: number; rollNumber?: string | null; reason?: string }[];
-  createdAt: string;
-  fileUrl: string;
-  uploader?: { name?: string };
 };
 
 type AttendanceRecord = {
@@ -68,15 +47,6 @@ type CommunityMember = {
   id: string;
   role: 'STUDENT' | 'TUTOR' | string;
   user?: { id: string; name?: string; email?: string; rollNumber?: string | null };
-};
-
-type ScheduleSlot = {
-  id: string;
-  dayOfWeek: string;
-  startTime: string;
-  endTime: string;
-  type?: string | null;
-  room?: string | null;
 };
 
 export default function ClassroomDetailPage() {
@@ -102,7 +72,9 @@ export default function ClassroomDetailPage() {
   if (isTutor) {
     tabs.push({ key: 'marks', label: 'Marks', icon: FileSpreadsheet });
   }
-  tabs.push({ key: 'attendance', label: 'Attendance', icon: ClipboardCheck });
+  if (!isTutor) {
+    tabs.push({ key: 'attendance', label: 'Attendance', icon: ClipboardCheck });
+  }
   tabs.push({ key: 'members', label: 'Members', icon: Users });
 
   return (
@@ -136,40 +108,10 @@ export default function ClassroomDetailPage() {
                   Open Course Workspace
                 </Link>
               )}
-              {isTutor && (
-                <Link to="/analytics" className="btn-secondary text-xs">
-                  View Analytics
-                </Link>
-              )}
             </div>
           </div>
         </div>
       </div>
-
-      {isTutor && (
-        <div className="card mb-4 border border-primary/10 bg-primary-light/30">
-          <div className="grid gap-3 md:grid-cols-3">
-            <div>
-              <p className="text-sm font-semibold text-text-primary">Announcements stay here</p>
-              <p className="mt-1 text-xs text-text-secondary">
-                Post classroom updates once and every student member gets notified immediately.
-              </p>
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-text-primary">Marks stay here</p>
-              <p className="mt-1 text-xs text-text-secondary">
-                Upload CT or lab spreadsheets here. Matching students will see their latest scores in the course page.
-              </p>
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-text-primary">Materials stay in the course page</p>
-              <p className="mt-1 text-xs text-text-secondary">
-                Use the linked course workspace for topics and materials so the same course code stays synchronized.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Tabs */}
       <div className="flex gap-2 mb-4 overflow-x-auto">
@@ -189,14 +131,7 @@ export default function ClassroomDetailPage() {
 
       {tab === 'announcements' && <AnnouncementsTab communityId={id!} isTutor={isTutor} />}
       {tab === 'marks' && <MarksTab communityId={id!} isTutor={isTutor} />}
-      {tab === 'attendance' && (
-        <AttendanceTab
-          communityId={id!}
-          isTutor={isTutor}
-          members={community.members ?? []}
-          scheduleSlots={community.scheduleSlots ?? []}
-        />
-      )}
+      {!isTutor && tab === 'attendance' && <AttendanceTab communityId={id!} />}
       {tab === 'members' && <MembersTab communityId={id!} isTutor={isTutor} members={community.members} />}
     </div>
   );
@@ -209,7 +144,7 @@ function AnnouncementsTab({ communityId, isTutor }: { communityId: string; isTut
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ title: '', body: '' });
 
-  const { data: announcements = [] } = useQuery<Announcement[]>({
+  const { data: announcements = [], isLoading: announcementsLoading } = useQuery<Announcement[]>({
     queryKey: ['announcements', communityId],
     queryFn: () => api.get(`/community/${communityId}/announcements`).then((r) => r.data.data),
   });
@@ -281,7 +216,9 @@ function AnnouncementsTab({ communityId, isTutor }: { communityId: string; isTut
         </div>
       )}
 
-      {announcements.length === 0 ? (
+      {announcementsLoading ? (
+        <div className="card text-center py-8 text-text-muted text-sm">Loading announcements…</div>
+      ) : announcements.length === 0 ? (
         <div className="card text-center py-8">
           <Megaphone size={40} className="mx-auto text-text-muted mb-2" />
           <p className="text-text-secondary">No announcements yet</p>
@@ -323,17 +260,6 @@ function MarksTab({ communityId, isTutor }: { communityId: string; isTutor: bool
     queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] });
   };
 
-  const { data: scores = [] } = useQuery<CommunityScore[]>({
-    queryKey: ['community-scores', communityId],
-    queryFn: () => api.get(`/community/${communityId}/marks/scores`).then((r) => r.data.data),
-  });
-
-  const { data: history = [] } = useQuery<MarkUploadHistory[]>({
-    queryKey: ['marks-history', communityId],
-    queryFn: () => api.get(`/community/${communityId}/marks/history`).then((r) => r.data.data),
-    enabled: isTutor,
-  });
-
   const uploadMutation = useMutation({
     mutationFn: (file: File) => {
       const fd = new FormData();
@@ -343,361 +269,113 @@ function MarksTab({ communityId, isTutor }: { communityId: string; isTutor: bool
       });
     },
     onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ['community-scores', communityId] });
-      queryClient.invalidateQueries({ queryKey: ['marks-history', communityId] });
+      queryClient.invalidateQueries({ queryKey: ['announcements', communityId] });
       invalidateNotifs();
       const { processed, updated, errors } = res.data.data;
-      toast.success(`Processed ${processed} rows, updated ${updated} students. ${errors.length} error(s).`);
+      const errCount = Array.isArray(errors) ? errors.length : 0;
+      toast.success(
+        `Upload complete: ${updated} student(s) updated from ${processed} row(s).${
+          errCount ? ` ${errCount} row note(s) — check API response if needed.` : ''
+        }`,
+      );
     },
     onError: () => toast.error('Upload failed'),
   });
 
+  if (!isTutor) {
+    return (
+      <div className="card text-center py-8 text-text-secondary text-sm">
+        Marks upload is available to classroom tutors only.
+      </div>
+    );
+  }
+
   return (
-    <div>
-      {isTutor && (
-        <div className="mb-4 flex items-center gap-3">
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="btn-primary flex items-center gap-2"
-            disabled={uploadMutation.isPending}
-          >
-            <Upload size={16} />
-            {uploadMutation.isPending ? 'Uploading...' : 'Upload Spreadsheet'}
-          </button>
-          <span className="text-xs text-text-muted">CSV, XLSX, or XLS</span>
-          <input
-            ref={fileRef}
-            type="file"
-            className="hidden"
-            accept=".csv,.xlsx,.xls"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) uploadMutation.mutate(file);
-              e.target.value = '';
-            }}
-          />
-        </div>
-      )}
-
-      {scores.length === 0 ? (
-        <div className="card text-center py-8">
-          <FileSpreadsheet size={40} className="mx-auto text-text-muted mb-2" />
-          <p className="text-text-secondary">No scores recorded yet</p>
-        </div>
-      ) : (
-        <div className="card overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left">
-                <th className="pb-3 font-medium text-text-secondary">Roll</th>
-                <th className="pb-3 font-medium text-text-secondary">Name</th>
-                <th className="pb-3 font-medium text-text-secondary">CT1</th>
-                <th className="pb-3 font-medium text-text-secondary">CT2</th>
-                <th className="pb-3 font-medium text-text-secondary">CT3</th>
-                <th className="pb-3 font-medium text-text-secondary">Lab</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {scores.map((s) => (
-                <tr key={s.userId}>
-                  <td className="py-2 font-mono text-xs">{s.rollNumber || '–'}</td>
-                  <td className="py-2">{s.name}</td>
-                  <td className="py-2">{s.ctScore1 ?? '–'}</td>
-                  <td className="py-2">{s.ctScore2 ?? '–'}</td>
-                  <td className="py-2">{s.ctScore3 ?? '–'}</td>
-                  <td className="py-2">{s.labScore ?? '–'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {isTutor && history.length > 0 && (
-        <div className="mt-6">
-          <h3 className="font-semibold mb-3">Upload History</h3>
-          <div className="space-y-2">
-            {history.map((h) => (
-              <div key={h.id} className="card text-sm flex items-center justify-between">
-                <div>
-                  <p className="font-medium">
-                    {h.processedCount} processed, {h.errorCount} errors
-                  </p>
-                  <p className="text-xs text-text-muted">
-                    {h.uploader?.name} • {formatDistanceToNow(new Date(h.createdAt), { addSuffix: true })}
-                  </p>
-                </div>
-                <a href={h.fileUrl} target="_blank" rel="noreferrer" className="text-primary text-xs hover:underline">
-                  View file
-                </a>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+    <div className="space-y-3">
+      <div className="card space-y-3">
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          className="btn-primary flex items-center gap-2"
+          disabled={uploadMutation.isPending}
+        >
+          <Upload size={16} />
+          {uploadMutation.isPending ? 'Uploading...' : 'Upload marks file'}
+        </button>
+        <p className="text-xs text-text-muted max-w-xl">
+          Spreadsheet: roll column plus <strong>CT1</strong> / <strong>CT2</strong> / <strong>CT3</strong> / <strong>Lab</strong>{' '}
+          headers, or one <strong>marks</strong> column (counted as Class Test 1). <strong>.csv</strong> and{' '}
+          <strong>.xlsx</strong> only — PDF is not extracted. Students are notified; official scores appear under My Scores.
+        </p>
+        <input
+          ref={fileRef}
+          type="file"
+          className="hidden"
+          accept=".csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) uploadMutation.mutate(file);
+            e.target.value = '';
+          }}
+        />
+      </div>
     </div>
   );
 }
 
 // ─── Attendance Tab ────────────────────────────────────────
 
-function AttendanceTab({
-  communityId,
-  isTutor,
-  members,
-  scheduleSlots,
-}: {
-  communityId: string;
-  isTutor: boolean;
-  members: CommunityMember[];
-  scheduleSlots: ScheduleSlot[];
-}) {
-  const queryClient = useQueryClient();
-
-  // Student view
+function AttendanceTab({ communityId }: { communityId: string }) {
   const { data: myAttendance } = useQuery<MyAttendance>({
     queryKey: ['my-attendance', communityId],
     queryFn: () => api.get(`/community/${communityId}/attendance/me`).then((r) => r.data.data),
-    enabled: !isTutor,
   });
 
-  // Tutor view — all records
-  const { data: allAttendance = [] } = useQuery<AttendanceRecord[]>({
-    queryKey: ['community-attendance', communityId],
-    queryFn: () => api.get(`/community/${communityId}/attendance`).then((r) => r.data.data),
-    enabled: isTutor,
-  });
-
-  // Tutor — recording state
-  const [recording, setRecording] = useState(false);
-  const [sessionDate, setSessionDate] = useState(() => new Date().toISOString().split('T')[0]);
-  const [selectedSlotId, setSelectedSlotId] = useState('');
-  const [rolls, setRolls] = useState<Record<string, boolean>>({});
-
-  const students = members.filter((m) => m.role === 'STUDENT');
-
-  function startRecording() {
-    const initial: Record<string, boolean> = {};
-    students.forEach((m) => { if (m.user) initial[m.user.id] = false; });
-    setRolls(initial);
-    setSelectedSlotId(scheduleSlots[0]?.id ?? '');
-    setSessionDate(new Date().toISOString().split('T')[0]);
-    setRecording(true);
-  }
-
-  const recordAttendance = useMutation({
-    mutationFn: () =>
-      api.post(`/community/${communityId}/attendance`, {
-        date: sessionDate,
-        slotId: selectedSlotId,
-        records: students.map((m) => ({ userId: m.user!.id, present: rolls[m.user!.id] ?? false })),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['community-attendance', communityId] });
-      setRecording(false);
-      toast.success('Attendance recorded');
-    },
-    onError: (e: any) =>
-      toast.error(e?.response?.data?.detail ?? 'Failed to record attendance'),
-  });
-
-  if (!isTutor) {
-    const summary = myAttendance?.summary;
-    return (
-      <div>
-        {summary && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-            <div className="card text-center">
-              <p className="text-2xl font-bold text-primary">{summary.percentage}%</p>
-              <p className="text-xs text-text-muted">Attendance</p>
-            </div>
-            <div className="card text-center">
-              <p className="text-2xl font-bold">{summary.total}</p>
-              <p className="text-xs text-text-muted">Total Classes</p>
-            </div>
-            <div className="card text-center">
-              <p className="text-2xl font-bold text-green-600">{summary.present}</p>
-              <p className="text-xs text-text-muted">Present</p>
-            </div>
-            <div className="card text-center">
-              <p className="text-2xl font-bold text-red-500">{summary.absent}</p>
-              <p className="text-xs text-text-muted">Absent</p>
-            </div>
-          </div>
-        )}
-        {myAttendance?.records?.length === 0 ? (
-          <div className="card text-center py-8">
-            <ClipboardCheck size={40} className="mx-auto text-text-muted mb-2" />
-            <p className="text-text-secondary">No attendance records</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {myAttendance?.records?.map((r) => (
-              <div key={r.id} className="card flex items-center justify-between text-sm">
-                <div>
-                  <p className="font-medium">{r.slot?.dayOfWeek} {r.slot?.startTime}–{r.slot?.endTime}</p>
-                  <p className="text-xs text-text-muted">{new Date(r.date).toLocaleDateString()}</p>
-                </div>
-                {r.present ? (
-                  <span className="flex items-center gap-1 text-green-600"><CheckCircle size={14} /> Present</span>
-                ) : (
-                  <span className="flex items-center gap-1 text-red-500"><XCircle size={14} /> Absent</span>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // ── Tutor view ────────────────────────────────────────────
+  const summary = myAttendance?.summary;
   return (
-    <div className="space-y-4">
-      {/* Record Session panel */}
-      {recording ? (
-        <div className="card space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold flex items-center gap-2">
-              <CalendarCheck size={18} className="text-primary" /> Record Session
-            </h3>
-            <button className="btn-secondary text-xs" onClick={() => setRecording(false)}>
-              Cancel
-            </button>
+    <div>
+      {summary && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+          <div className="card text-center">
+            <p className="text-2xl font-bold text-primary">{summary.percentage}%</p>
+            <p className="text-xs text-text-muted">Attendance</p>
           </div>
-
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div>
-              <label className="label">Date</label>
-              <input
-                type="date"
-                className="input"
-                value={sessionDate}
-                max={new Date().toISOString().split('T')[0]}
-                onChange={(e) => setSessionDate(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="label">Class slot</label>
-              {scheduleSlots.length > 0 ? (
-                <select
-                  className="input"
-                  value={selectedSlotId}
-                  onChange={(e) => setSelectedSlotId(e.target.value)}
-                >
-                  <option value="">Select slot</option>
-                  {scheduleSlots.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.dayOfWeek} {s.startTime}–{s.endTime}{s.room ? ` (${s.room})` : ''}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <p className="text-sm text-text-muted py-2">No schedule slots found for this course.</p>
-              )}
-            </div>
+          <div className="card text-center">
+            <p className="text-2xl font-bold">{summary.total}</p>
+            <p className="text-xs text-text-muted">Total Classes</p>
           </div>
-
-          {students.length === 0 ? (
-            <p className="text-sm text-text-muted text-center py-4">No students in this classroom yet.</p>
-          ) : (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between mb-1">
-                <p className="text-sm font-medium text-text-secondary">Roll call ({students.length} students)</p>
-                <div className="flex gap-2 text-xs">
-                  <button
-                    className="text-green-600 hover:underline"
-                    onClick={() => setRolls(Object.fromEntries(students.map((m) => [m.user!.id, true])))}
-                  >
-                    Mark all present
-                  </button>
-                  <span className="text-text-muted">·</span>
-                  <button
-                    className="text-red-500 hover:underline"
-                    onClick={() => setRolls(Object.fromEntries(students.map((m) => [m.user!.id, false])))}
-                  >
-                    Mark all absent
-                  </button>
-                </div>
-              </div>
-              {students.map((m) => (
-                <div key={m.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
-                  <div>
-                    <p className="font-medium text-sm">{m.user?.name}</p>
-                    <p className="text-xs text-text-muted">{m.user?.rollNumber || m.user?.email}</p>
-                  </div>
-                  <button
-                    onClick={() => setRolls((r) => ({ ...r, [m.user!.id]: !r[m.user!.id] }))}
-                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                      rolls[m.user!.id]
-                        ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                        : 'bg-red-100 text-red-600 hover:bg-red-200'
-                    }`}
-                  >
-                    {rolls[m.user!.id] ? 'Present' : 'Absent'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="flex justify-end">
-            <button
-              className="btn-primary"
-              disabled={!selectedSlotId || students.length === 0 || recordAttendance.isPending}
-              onClick={() => recordAttendance.mutate()}
-            >
-              {recordAttendance.isPending ? 'Saving…' : 'Submit Attendance'}
-            </button>
+          <div className="card text-center">
+            <p className="text-2xl font-bold text-green-600">{summary.present}</p>
+            <p className="text-xs text-text-muted">Present</p>
+          </div>
+          <div className="card text-center">
+            <p className="text-2xl font-bold text-red-500">{summary.absent}</p>
+            <p className="text-xs text-text-muted">Absent</p>
           </div>
         </div>
-      ) : (
-        <button className="btn-primary flex items-center gap-2" onClick={startRecording}>
-          <CalendarCheck size={16} /> Record Session
-        </button>
       )}
-
-      {/* Past records */}
-      <div>
-        <p className="text-sm font-medium text-text-secondary mb-2">Past Records</p>
-        {allAttendance.length === 0 ? (
-          <div className="card text-center py-8">
-            <ClipboardCheck size={40} className="mx-auto text-text-muted mb-2" />
-            <p className="text-text-secondary">No attendance records yet</p>
-          </div>
-        ) : (
-          <div className="card overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border text-left">
-                  <th className="pb-3 font-medium text-text-secondary">Date</th>
-                  <th className="pb-3 font-medium text-text-secondary">Slot</th>
-                  <th className="pb-3 font-medium text-text-secondary">Student</th>
-                  <th className="pb-3 font-medium text-text-secondary">Roll</th>
-                  <th className="pb-3 font-medium text-text-secondary">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {allAttendance.map((r) => (
-                  <tr key={r.id}>
-                    <td className="py-2">{new Date(r.date).toLocaleDateString()}</td>
-                    <td className="py-2">{r.slot?.dayOfWeek} {r.slot?.startTime}–{r.slot?.endTime}</td>
-                    <td className="py-2">{r.user?.name}</td>
-                    <td className="py-2 font-mono text-xs">{r.user?.rollNumber || '–'}</td>
-                    <td className="py-2">
-                      {r.present ? (
-                        <span className="text-green-600 flex items-center gap-1"><CheckCircle size={12} /> Present</span>
-                      ) : (
-                        <span className="text-red-500 flex items-center gap-1"><XCircle size={12} /> Absent</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      {myAttendance?.records?.length === 0 ? (
+        <div className="card text-center py-8">
+          <ClipboardCheck size={40} className="mx-auto text-text-muted mb-2" />
+          <p className="text-text-secondary">No attendance records</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {myAttendance?.records?.map((r) => (
+            <div key={r.id} className="card flex items-center justify-between text-sm">
+              <div>
+                <p className="font-medium">{r.slot?.dayOfWeek} {r.slot?.startTime}–{r.slot?.endTime}</p>
+                <p className="text-xs text-text-muted">{new Date(r.date).toLocaleDateString()}</p>
+              </div>
+              {r.present ? (
+                <span className="flex items-center gap-1 text-green-600"><CheckCircle size={14} /> Present</span>
+              ) : (
+                <span className="flex items-center gap-1 text-red-500"><XCircle size={14} /> Absent</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -5,6 +5,11 @@ import { Upload, CalendarDays, Clock, MapPin, Trash2, Plus, X, GripVertical, Ale
 import { useDropzone } from 'react-dropzone';
 import api from '@/lib/api';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '@/stores/auth.store';
+
+export function routineDraftStorageKey(userId: string | undefined) {
+  return userId ? `routine-draft-v1:${userId}` : 'routine-draft-v1:anonymous';
+}
 
 const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'] as const;
 const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -113,10 +118,11 @@ type TimeSeg = 'sh' | 'sm' | 'eh' | 'em';
 const SEG_RIGHT: Record<TimeSeg, TimeSeg> = { sh: 'sm', sm: 'eh', eh: 'em', em: 'sh' };
 const SEG_LEFT: Record<TimeSeg, TimeSeg> = { sm: 'sh', eh: 'sm', em: 'eh', sh: 'em' };
 
-const DRAFT_KEY = 'routine-draft-v1';
-
 export default function RoutinePage() {
   const queryClient = useQueryClient();
+  const userId = useAuthStore((s) => s.user?.id);
+  const isTutorViewer = useAuthStore((s) => s.user?.role === 'TUTOR');
+  const draftKey = routineDraftStorageKey(userId);
   const [showUpload, setShowUpload] = useState(false);
   const [coursesForms, setCoursesForms] = useState<CourseForm[]>([]);
   const [scannedCodes, setScannedCodes] = useState<ScannedCode[]>([]);
@@ -152,10 +158,20 @@ export default function RoutinePage() {
     setPendingSlotFocusKey(null);
   }, [coursesForms, pendingSlotFocusKey]);
 
-  // Restore draft from localStorage on mount (localStorage persists across navigation and page refresh).
   useEffect(() => {
+    if (isTutorViewer && showUpload) setShowUpload(false);
+  }, [isTutorViewer, showUpload]);
+
+  // Restore draft per logged-in user so navigation/reload keep in-progress routine edits.
+  // Logout no longer wipes this key (see auth store); switching accounts uses a different key.
+  useEffect(() => {
+    if (!userId) {
+      setDraftLoaded(false);
+      return;
+    }
+    setDraftLoaded(false);
     try {
-      const raw = window.localStorage.getItem(DRAFT_KEY);
+      const raw = window.localStorage.getItem(draftKey);
       if (raw) {
         const draft = JSON.parse(raw) as {
           showUpload?: boolean;
@@ -173,17 +189,17 @@ export default function RoutinePage() {
     } finally {
       setDraftLoaded(true);
     }
-  }, []);
+  }, [userId, draftKey]);
 
   // Persist draft to localStorage after initial hydration — guard prevents overwriting
   // a valid saved draft with empty initial state on the very first render.
   useEffect(() => {
-    if (!draftLoaded) return;
+    if (!userId || !draftLoaded) return;
     window.localStorage.setItem(
-      DRAFT_KEY,
+      draftKey,
       JSON.stringify({ showUpload, coursesForms, scannedCodes, manualCodeInput })
     );
-  }, [draftLoaded, showUpload, coursesForms, scannedCodes, manualCodeInput]);
+  }, [userId, draftKey, draftLoaded, showUpload, coursesForms, scannedCodes, manualCodeInput]);
 
   const { data: schedule = [], isLoading, isError } = useQuery({
     queryKey: ['schedule'],
@@ -253,7 +269,7 @@ export default function RoutinePage() {
       setScannedCodes([]);
       setManualCodeInput('');
       setShowUpload(false);
-      window.localStorage.removeItem(DRAFT_KEY);
+      window.localStorage.removeItem(routineDraftStorageKey(useAuthStore.getState().user?.id));
       toast.success('Courses and schedule saved!');
     },
     onError: (err: any) => {
@@ -775,15 +791,17 @@ export default function RoutinePage() {
             <Plus size={18} />
             Add Course
           </button>
-          <button onClick={() => { setShowUpload(!showUpload); setCoursesForms([]); }} className="btn-primary flex items-center gap-2">
-            <Upload size={18} />
-            Scan Routine
-          </button>
+          {!isTutorViewer && (
+            <button onClick={() => { setShowUpload(!showUpload); setCoursesForms([]); }} className="btn-primary flex items-center gap-2">
+              <Upload size={18} />
+              Scan Routine
+            </button>
+          )}
         </div>
       </div>
 
       {/* Upload area */}
-      {showUpload && !showCourseForm && !showReview && (
+      {!isTutorViewer && showUpload && !showCourseForm && !showReview && (
         <div className="card mb-6">
           <div
             {...getRootProps()}
@@ -812,7 +830,7 @@ export default function RoutinePage() {
       )}
 
       {/* OCR review — pick which detected codes to keep */}
-      {showReview && (
+      {!isTutorViewer && showReview && (
         <div className="card mb-6">
           <div className="flex items-center justify-between mb-1">
             <div>

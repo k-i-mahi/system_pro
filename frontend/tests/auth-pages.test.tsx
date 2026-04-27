@@ -21,7 +21,7 @@ describe('LoginPage', () => {
     renderWithProviders(<LoginPage />);
 
     expect(screen.getByRole('heading', { name: 'Sign In' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('you@university.edu')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Enter your educational email')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
     expect(screen.getByText(/don't have an account/i)).toBeInTheDocument();
   });
@@ -44,7 +44,7 @@ describe('RegisterPage', () => {
 
     expect(screen.getByRole('heading', { name: 'Create Account' })).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Alex Student')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('you@university.edu')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Enter your educational email')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Your university name')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /create account/i })).toBeInTheDocument();
   });

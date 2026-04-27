@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { BookOpen, RefreshCw, Send, Sparkles } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '@/stores/auth.store';
+import { useTutorSessionStore } from '@/stores/tutor-session.store';
 import { fetchWithApiAuth } from '@/lib/api';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
@@ -15,6 +16,8 @@ interface Answer {
   citations: Citation[];
   loading: boolean;
 }
+
+const EMPTY_ANSWERS: Answer[] = [];
 
 export interface CourseMaterialOption {
   id: string;
@@ -31,6 +34,8 @@ export interface CourseMaterialOption {
 interface Props {
   courseId?: string;
   topicId?: string;
+  /** Stable key for persisted Q&A (e.g. courseId:topicId). */
+  persistenceKey: string;
   materials?: CourseMaterialOption[];
   onCitationClick?: (c: Citation) => void;
 }
@@ -49,10 +54,12 @@ function ingestBadge(m: CourseMaterialOption): { label: string; className: strin
   return { label: 'Queued', className: 'bg-amber-500/15 text-amber-800 dark:text-amber-300' };
 }
 
-export function AskCoursePane({ courseId, topicId, materials, onCitationClick }: Props) {
+export function AskCoursePane({ courseId, topicId, persistenceKey, materials, onCitationClick }: Props) {
   const queryClient = useQueryClient();
-  const [question, setQuestion] = useState('');
-  const [answers, setAnswers] = useState<Answer[]>([]);
+  const question = useTutorSessionStore((s) => s.byKey[persistenceKey]?.askQuestion ?? '');
+  const answers = useTutorSessionStore((s) => s.byKey[persistenceKey]?.askAnswers ?? EMPTY_ANSWERS);
+  const setAskQuestion = useTutorSessionStore((s) => s.setAskQuestion);
+  const setAskAnswers = useTutorSessionStore((s) => s.setAskAnswers);
   const [streaming, setStreaming] = useState(false);
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
@@ -127,8 +134,8 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
       return;
     }
 
-    setAnswers((prev) => [...prev, { question: q, body: '', citations: [], loading: true }]);
-    setQuestion('');
+    setAskAnswers(persistenceKey, (prev) => [...prev, { question: q, body: '', citations: [], loading: true }]);
+    setAskQuestion(persistenceKey, '');
     setStreaming(true);
 
     const controller = new AbortController();
@@ -208,7 +215,7 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
                 : '';
             if (tokenChunk) {
               accumulated += tokenChunk;
-              setAnswers((prev) => {
+              setAskAnswers(persistenceKey, (prev) => {
                 const updated = [...prev];
                 updated[updated.length - 1] = {
                   ...updated[updated.length - 1],
@@ -217,7 +224,7 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
                 return updated;
               });
             } else if (currentEvent === 'citations' && Array.isArray(parsed.citations)) {
-              setAnswers((prev) => {
+              setAskAnswers(persistenceKey, (prev) => {
                 const updated = [...prev];
                 updated[updated.length - 1] = {
                   ...updated[updated.length - 1],
@@ -233,7 +240,7 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
           }
         }
       }
-      setAnswers((prev) => {
+      setAskAnswers(persistenceKey, (prev) => {
         const updated = [...prev];
         updated[updated.length - 1] = {
           ...updated[updated.length - 1],
@@ -244,7 +251,7 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
         toast.error('Failed to answer your question.');
-        setAnswers((prev) => prev.slice(0, -1));
+        setAskAnswers(persistenceKey, (prev) => prev.slice(0, -1));
       }
     } finally {
       setStreaming(false);
@@ -374,7 +381,7 @@ export function AskCoursePane({ courseId, topicId, materials, onCitationClick }:
               : 'Select a course to enable grounded Q&A'
           }
           value={question}
-          onChange={(e) => setQuestion(e.target.value)}
+          onChange={(e) => setAskQuestion(persistenceKey, e.target.value)}
           disabled={streaming || !courseId}
           aria-label="Course question input"
         />

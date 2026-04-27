@@ -5,6 +5,7 @@ import api from '@/lib/api';
 import toast from 'react-hot-toast';
 import { formatDistanceToNow } from 'date-fns';
 import { useEffect, useState } from 'react';
+import { useAuthStore } from '@/stores/auth.store';
 
 const ICON_MAP: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
   NEW_COURSE: BookOpen,
@@ -22,6 +23,8 @@ const ICON_MAP: Record<string, React.ComponentType<{ size?: number; className?: 
 
 export default function NotificationsPage() {
   const queryClient = useQueryClient();
+  const viewerRole = useAuthStore((s) => s.user?.role);
+  const isTutorViewer = viewerRole === 'TUTOR';
   const [activeResponseId, setActiveResponseId] = useState<string | null>(null);
   const [responseForm, setResponseForm] = useState({
     topicCovered: '',
@@ -64,7 +67,7 @@ export default function NotificationsPage() {
   const classResponseMutation = useMutation({
     mutationFn: (payload: {
       notificationId: string;
-      action: 'attended' | 'missed';
+      action: 'attended' | 'missed' | 'class_not_held';
       topicCovered?: string;
       materialNeeded?: boolean;
       materialRequest?: string;
@@ -74,10 +77,16 @@ export default function NotificationsPage() {
       invalidateAll();
       setActiveResponseId(null);
       setResponseForm({ topicCovered: '', materialNeeded: false, materialRequest: '', notes: '' });
+      if (variables.action === 'attended' || variables.action === 'missed') {
+        queryClient.invalidateQueries({ queryKey: ['analytics-overview'] });
+        queryClient.invalidateQueries({ queryKey: ['analytics-course'] });
+      }
       toast.success(
         variables.action === 'missed'
-          ? 'Marked as missed class'
-          : 'Response submitted and attendance recorded'
+          ? 'Marked as missed — attendance updated'
+          : variables.action === 'class_not_held'
+            ? 'Marked as class not held — attendance unchanged'
+            : 'Response submitted and attendance recorded'
       );
     },
     onError: (err: any) => {
@@ -116,12 +125,15 @@ export default function NotificationsPage() {
           <Bell size={48} className="mx-auto mb-3 text-text-muted" />
           <p className="text-text-primary font-medium">No notifications yet</p>
           <p className="mt-3 text-sm leading-relaxed text-text-secondary">
-            When you open this page, we sync class and lab reminders for today from your schedule. You will also see
-            prompts after class, material updates from instructors, and community announcements.
+            {isTutorViewer
+              ? 'Teaching reminders for your classrooms appear here when you have a class scheduled for today.'
+              : 'When you open this page, we sync class and lab reminders for today from your schedule. You will also see prompts after class, material updates from instructors, and community announcements.'}
           </p>
-          <p className="mt-2 text-xs text-text-muted">
-            If today has no classes in your routine, the list can stay empty until one is scheduled.
-          </p>
+          {!isTutorViewer && (
+            <p className="mt-2 text-xs text-text-muted">
+              If today has no classes in your routine, the list can stay empty until one is scheduled.
+            </p>
+          )}
         </div>
       ) : (
         <div className="space-y-2">
@@ -130,6 +142,7 @@ export default function NotificationsPage() {
             const isAttendancePrompt = Boolean(notif.metadata?.attendancePrompt);
             const hasClassResponse = Boolean(notif.metadata?.classResponse);
             const isMissedClass = Boolean(notif.metadata?.missedClass);
+            const isClassNotHeld = Boolean(notif.metadata?.classNotHeld);
             const isFollowup = Boolean(notif.metadata?.isFollowup);
             const formOpen = activeResponseId === notif.id;
             return (
@@ -158,24 +171,30 @@ export default function NotificationsPage() {
                         to={notif.metadata?.deepLink || `/community/${notif.metadata.communityId}`}
                         className="text-xs text-primary hover:underline"
                       >
-                        {notif.metadata?.kind === 'COURSE_MARKS_UPLOADED'
-                          ? 'View my marks'
-                          : notif.metadata?.kind === 'COURSE_MATERIAL_UPLOADED'
-                            ? 'Open course materials'
-                            : notif.metadata?.kind === 'CLASSROOM_ANNOUNCEMENT'
-                              ? 'Open classroom'
-                              : notif.type === 'MATERIAL_UPLOAD_PROMPT'
-                                ? 'Go to community'
-                                : notif.metadata?.communityId
-                                  ? 'Open classroom'
-                                  : 'Open'}
+                        {notif.metadata?.kind === 'THREAD_REPLY' || notif.metadata?.kind === 'THREAD_LIKE'
+                          ? 'Open thread'
+                          : notif.metadata?.kind === 'CT_MARKS_FILE_UPLOADED' || notif.metadata?.kind === 'COURSE_MARKS_UPLOADED'
+                            ? 'View my marks'
+                            : notif.metadata?.kind === 'COURSE_MATERIAL_UPLOADED'
+                              ? 'Open course materials'
+                              : notif.metadata?.kind === 'CLASSROOM_ANNOUNCEMENT'
+                                ? 'Open classroom'
+                                : notif.type === 'MATERIAL_UPLOAD_PROMPT'
+                                  ? 'Go to community'
+                                  : notif.metadata?.communityId
+                                    ? 'Open classroom'
+                                    : 'Open'}
                       </Link>
                     </div>
                   )}
-                  {isAttendancePrompt && (
+                  {isAttendancePrompt && !isTutorViewer && (
                     <div className="mt-3 rounded-md border border-border bg-bg-main p-3">
                       {/* Already resolved states */}
-                      {isMissedClass ? (
+                      {isClassNotHeld ? (
+                        <p className="text-xs text-text-muted flex items-center gap-1">
+                          <Info size={12} className="text-text-muted" /> Class not held — attendance unchanged
+                        </p>
+                      ) : isMissedClass ? (
                         <p className="text-xs text-text-muted flex items-center gap-1">
                           <XCircle size={12} className="text-red-400" /> Marked as missed class
                         </p>
@@ -225,6 +244,18 @@ export default function NotificationsPage() {
                                 }
                               >
                                 {classResponseMutation.isPending ? 'Saving…' : 'I missed class'}
+                              </button>
+                              <button
+                                className="btn-secondary text-xs text-text-secondary border-border"
+                                disabled={classResponseMutation.isPending}
+                                onClick={() =>
+                                  classResponseMutation.mutate({
+                                    notificationId: notif.id,
+                                    action: 'class_not_held',
+                                  })
+                                }
+                              >
+                                Class not held
                               </button>
                               {notif.metadata?.courseId && (
                                 <Link

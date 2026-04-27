@@ -1,14 +1,13 @@
-import { MessageCircle, BookOpen, Brain, FileQuestion, Globe } from 'lucide-react';
+import { MessageCircle, BookOpen, FileQuestion, Globe } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-export type TutorMode = 'chat' | 'ask-course' | 'explain' | 'quiz' | 'resources';
+export type TutorMode = 'chat' | 'ask-course' | 'quiz' | 'resources';
 
 const MODES: Array<{ id: TutorMode; label: string; icon: React.ComponentType<{ className?: string }>; hint: string }> = [
   { id: 'chat', label: 'Chat', icon: MessageCircle, hint: 'Free-form conversation with the tutor' },
   { id: 'ask-course', label: 'Ask Course', icon: BookOpen, hint: 'Grounded answers with citations from your materials' },
-  { id: 'explain', label: 'Explain', icon: Brain, hint: 'Structured explanation at your mastery level' },
   { id: 'quiz', label: 'Quiz', icon: FileQuestion, hint: 'Adaptive-difficulty MCQ practice' },
-  { id: 'resources', label: 'Resources', icon: Globe, hint: 'Discover videos, articles, papers and blog posts' },
+  { id: 'resources', label: 'Resources', icon: Globe, hint: 'Discover videos, articles, and reading from the web' },
 ];
 
 interface Props {

@@ -7,6 +7,7 @@ from app.core import response as resp
 from app.core.deps import CurrentUserIdDep, DBDep, get_current_user_id
 from app.core.exceptions import ValidationError
 from app.core.rate_limit import limiter
+from app.core.socket import emit_routine_updated
 from app.schemas.routine import BulkCreateCoursesRequest, MoveSlotRequest, UpdateSlotRequest
 from app.services import routine_service
 
@@ -48,6 +49,10 @@ async def get_schedule(db: DBDep, user_id: CurrentUserIdDep) -> JSONResponse:
 @router.post("/courses")
 async def bulk_create_courses(body: BulkCreateCoursesRequest, db: DBDep, user_id: CurrentUserIdDep) -> JSONResponse:
     courses = await routine_service.bulk_create_courses(db, user_id, body)
+    for row in courses:
+        cid = row.get("id")
+        if isinstance(cid, str):
+            await emit_routine_updated(cid)
     return resp.created(courses)
 
 

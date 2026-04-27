@@ -1,4 +1,4 @@
-import { Fragment, useState, useCallback, type ChangeEvent } from 'react';
+import { Fragment, useState, useCallback, useEffect, type ChangeEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  ClipboardList,
   ExternalLink,
   FileText,
   Link as LinkIcon,
@@ -22,15 +21,42 @@ import {
   X,
 } from 'lucide-react';
 import api from '@/lib/api';
+import { isLabCourse } from '@/lib/course-type';
 import toast from 'react-hot-toast';
 import { canUploadMaterial } from '@/lib/rbac';
 import { useAuthStore } from '@/stores/auth.store';
+import {
+  enqueueMaterialFiles,
+  retryMaterialUploadFromIdb,
+  useMaterialUploadStore,
+} from '@/stores/material-upload.store';
+import { useShallow } from 'zustand/react/shallow';
+
+/** Tutor/official marks on enrollment (not edited via student self-service UI). */
+type StudentLabMarks = {
+  labTest?: number | null;
+  labQuiz?: number | null;
+  assignment?: number | null;
+};
+
+/** Student-entered theory marks (Path B); separate from instructor ctScore/labScore. */
+type StudentTheoryMarks = {
+  classTest1?: number | null;
+  classTest2?: number | null;
+  classTest3?: number | null;
+  assignment?: number | null;
+};
 
 type EnrollmentScores = {
+  id?: string;
   ctScore1?: number | null;
   ctScore2?: number | null;
   ctScore3?: number | null;
   labScore?: number | null;
+  /** Student self-tracked lab marks (LAB courses); separate from ctScore/labScore. */
+  studentLabMarks?: StudentLabMarks | null;
+  /** Student self-entered theory marks (THEORY courses). */
+  studentTheoryMarks?: StudentTheoryMarks | null;
 };
 
 type MaterialItem = {
@@ -65,6 +91,8 @@ type TodayAttendance = {
 type CourseDetail = {
   courseCode: string;
   courseName: string;
+  /** THEORY vs LAB from API (`Course.courseType`); defaults to theory-style labels when absent. */
+  courseType?: string;
   enrollment?: EnrollmentScores | null;
   topics?: TopicItem[];
   canManage?: boolean;
@@ -85,11 +113,6 @@ type TopicDraft = {
   description: string;
   weekNumber: string;
   sessionDate: string;
-};
-
-type StudyLogDraft = {
-  title: string;
-  notes: string;
 };
 
 type MaterialDraft = {
@@ -132,16 +155,63 @@ function extractErrorMessage(err: any, fallback: string): string {
   return err?.response?.data?.error?.message || err?.message || fallback;
 }
 
+type LabMarkFieldKey = 'labTest' | 'labQuiz' | 'assignment';
+
+type TheoryMarkFieldKey = 'classTest1' | 'classTest2' | 'classTest3' | 'assignment';
+
+type AssessmentRow = {
+  label: string;
+  score: number | null | undefined;
+  max: number;
+  /** Tutor-uploaded official mark (theory CT / enrollment); read-only. */
+  officialScore?: number | null;
+  /** Present for lab courses — maps to `studentLabMarks` / PATCH body. */
+  labField?: LabMarkFieldKey;
+  /** Present for theory courses — maps to `studentTheoryMarks` / PATCH body. */
+  theoryField?: TheoryMarkFieldKey;
+};
+
+function buildStudentAssessmentRows(course: CourseDetail): AssessmentRow[] {
+  const e = course.enrollment;
+  if (!e) return [];
+  if (isLabCourse(course)) {
+    const m = e.studentLabMarks;
+    return [
+      { label: 'Lab Test', labField: 'labTest', score: m?.labTest ?? null, max: 20 },
+      { label: 'Lab Quiz', labField: 'labQuiz', score: m?.labQuiz ?? null, max: 20 },
+      { label: 'Assignment', labField: 'assignment', score: m?.assignment ?? null, max: 40 },
+    ];
+  }
+  const m = e.studentTheoryMarks;
+  return [
+    {
+      label: 'Class Test 1',
+      theoryField: 'classTest1',
+      score: m?.classTest1 ?? null,
+      max: 20,
+      officialScore: e.ctScore1 ?? null,
+    },
+    {
+      label: 'Class Test 2',
+      theoryField: 'classTest2',
+      score: m?.classTest2 ?? null,
+      max: 20,
+      officialScore: e.ctScore2 ?? null,
+    },
+    {
+      label: 'Class Test 3',
+      theoryField: 'classTest3',
+      score: m?.classTest3 ?? null,
+      max: 20,
+      officialScore: e.ctScore3 ?? null,
+    },
+    { label: 'Assignment/Spot Test', theoryField: 'assignment', score: m?.assignment ?? null, max: 40 },
+  ];
+}
+
 function isSupportedMaterialFile(file: File): boolean {
   const lowerName = file.name.toLowerCase();
   return SUPPORTED_MATERIAL_EXTENSIONS.some((extension) => lowerName.endsWith(extension));
-}
-
-function inferMaterialType(file: File): 'PDF' | 'IMAGE' | 'NOTE' {
-  const lowerName = file.name.toLowerCase();
-  if (lowerName.endsWith('.txt')) return 'NOTE';
-  if (['.jpg', '.jpeg', '.png', '.webp'].some((extension) => lowerName.endsWith(extension))) return 'IMAGE';
-  return 'PDF';
 }
 
 function getMaterialBadgeLabel(material: MaterialItem): string {
@@ -212,12 +282,18 @@ export default function CourseDetailPage() {
   });
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
   const [materialDraft, setMaterialDraft] = useState<MaterialDraft>({ title: '', fileUrl: '' });
-  const [uploadingTopicId, setUploadingTopicId] = useState<string | null>(null);
   const [fileFormatWarning, setFileFormatWarning] = useState<{ topicId: string; message: string } | null>(null);
-
-  // Student study-log state
-  const [showStudyLogForm, setShowStudyLogForm] = useState(false);
-  const [studyLogDraft, setStudyLogDraft] = useState<StudyLogDraft>({ title: '', notes: '' });
+  const [labDraft, setLabDraft] = useState<Record<LabMarkFieldKey, string>>({
+    labTest: '',
+    labQuiz: '',
+    assignment: '',
+  });
+  const [theoryDraft, setTheoryDraft] = useState<Record<TheoryMarkFieldKey, string>>({
+    classTest1: '',
+    classTest2: '',
+    classTest3: '',
+    assignment: '',
+  });
 
   const {
     data: course,
@@ -240,6 +316,107 @@ export default function CourseDetailPage() {
   const isEnrolledStudent =
     user?.role === 'STUDENT' && (Boolean(course?.enrollment) || course?.viewerRole === 'STUDENT');
   const canAddTopicInHeader = canManageCourse || isEnrolledStudent;
+
+  const courseMaterialUploads = useMaterialUploadStore(
+    useShallow((s) => s.items.filter((i) => i.courseId === courseId)),
+  );
+
+  useEffect(() => {
+    if (!course || !isLabCourse(course) || !course.enrollment) return;
+    const m = course.enrollment.studentLabMarks;
+    setLabDraft({
+      labTest: m?.labTest != null ? String(m.labTest) : '',
+      labQuiz: m?.labQuiz != null ? String(m.labQuiz) : '',
+      assignment: m?.assignment != null ? String(m.assignment) : '',
+    });
+  }, [course, courseId, course?.enrollment?.studentLabMarks]);
+
+  useEffect(() => {
+    if (!course || isLabCourse(course) || !course.enrollment) return;
+    const m = course.enrollment.studentTheoryMarks;
+    setTheoryDraft({
+      classTest1: m?.classTest1 != null ? String(m.classTest1) : '',
+      classTest2: m?.classTest2 != null ? String(m.classTest2) : '',
+      classTest3: m?.classTest3 != null ? String(m.classTest3) : '',
+      assignment: m?.assignment != null ? String(m.assignment) : '',
+    });
+  }, [course, courseId, course?.enrollment?.studentTheoryMarks]);
+
+  const patchStudentLabMarksMutation = useMutation({
+    mutationFn: (payload: Partial<Record<LabMarkFieldKey, number | null>>) =>
+      api.patch(`/courses/${courseId}/my-lab-marks`, payload).then((response) => response.data.data as { studentLabMarks: StudentLabMarks }),
+    onSuccess: () => {
+      invalidateCourseViews();
+      toast.success('Your lab marks were saved.', {
+        icon: <CheckCircle2 className="text-green-600" size={20} />,
+        duration: 3500,
+      });
+    },
+    onError: (err: unknown) => {
+      toast.error(extractErrorMessage(err, 'Could not save lab marks.'));
+    },
+  });
+
+  function saveLabMarkField(field: LabMarkFieldKey, max: number) {
+    const raw = labDraft[field].trim();
+    if (raw === '') {
+      toast.error('Enter a mark or use Clear.');
+      return;
+    }
+    const n = Number.parseFloat(raw);
+    if (Number.isNaN(n)) {
+      toast.error('Enter a valid number.');
+      return;
+    }
+    if (n < 0 || n > max) {
+      toast.error(`Mark must be between 0 and ${max}.`);
+      return;
+    }
+    patchStudentLabMarksMutation.mutate({ [field]: n });
+  }
+
+  function clearLabMarkField(field: LabMarkFieldKey) {
+    patchStudentLabMarksMutation.mutate({ [field]: null });
+  }
+
+  const patchStudentTheoryMarksMutation = useMutation({
+    mutationFn: (payload: Partial<Record<TheoryMarkFieldKey, number | null>>) =>
+      api
+        .patch(`/courses/${courseId}/my-theory-marks`, payload)
+        .then((response) => response.data.data as { studentTheoryMarks: StudentTheoryMarks }),
+    onSuccess: () => {
+      invalidateCourseViews();
+      toast.success('Your marks were saved.', {
+        icon: <CheckCircle2 className="text-green-600" size={20} />,
+        duration: 3500,
+      });
+    },
+    onError: (err: unknown) => {
+      toast.error(extractErrorMessage(err, 'Could not save marks.'));
+    },
+  });
+
+  function saveTheoryMarkField(field: TheoryMarkFieldKey, max: number) {
+    const raw = theoryDraft[field].trim();
+    if (raw === '') {
+      toast.error('Enter a mark or use Clear.');
+      return;
+    }
+    const n = Number.parseFloat(raw);
+    if (Number.isNaN(n)) {
+      toast.error('Enter a valid number.');
+      return;
+    }
+    if (n < 0 || n > max) {
+      toast.error(`Mark must be between 0 and ${max}.`);
+      return;
+    }
+    patchStudentTheoryMarksMutation.mutate({ [field]: n });
+  }
+
+  function clearTheoryMarkField(field: TheoryMarkFieldKey) {
+    patchStudentTheoryMarksMutation.mutate({ [field]: null });
+  }
 
   function canModifyTopic(topic: TopicItem): boolean {
     if (canManageCourse) return true;
@@ -334,60 +511,6 @@ export default function CourseDetailPage() {
     },
   });
 
-  // Student study-log: POST a personal topic → backend auto-marks attendance
-  const addStudyLogMutation = useMutation({
-    mutationFn: (data: { title: string; description?: string }) =>
-      api.post(`/courses/${courseId}/topics`, {
-        title: data.title,
-        description: data.description || null,
-        status: 'IN_PROGRESS',
-      }),
-    onSuccess: () => {
-      invalidateCourseViews(true);
-      setShowStudyLogForm(false);
-      setStudyLogDraft({ title: '', notes: '' });
-      toast.success('Topic logged! Attendance auto-marked if class is scheduled today.');
-    },
-    onError: (err: any) => {
-      toast.error(extractErrorMessage(err, 'Failed to log topic.'));
-    },
-  });
-
-  const uploadMaterialMutation = useMutation({
-    mutationFn: ({ topicId, file }: { topicId: string; file: File }) => {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('title', file.name);
-      formData.append('fileType', inferMaterialType(file));
-
-      return api.post(`/courses/${courseId}/topics/${topicId}/materials`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-    },
-    onMutate: ({ topicId }) => {
-      setUploadingTopicId(topicId);
-      setFileFormatWarning((w) => (w?.topicId === topicId ? null : w));
-    },
-    onSuccess: (_, { topicId }) => {
-      invalidateCourseViews(true);
-      ensureExpanded(topicId);
-      toast.success('Material uploaded', {
-        icon: <CheckCircle2 className="text-green-600" size={20} />,
-        duration: 4000,
-      });
-    },
-    onError: (err: any, { topicId }) => {
-      const msg = extractErrorMessage(err, `Supported formats: ${SUPPORTED_MATERIAL_LABEL}.`);
-      setFileFormatWarning({ topicId, message: msg });
-      setTimeout(() => {
-        setFileFormatWarning((w) => (w?.topicId === topicId ? null : w));
-      }, 8000);
-    },
-    onSettled: () => {
-      setUploadingTopicId(null);
-    },
-  });
-
   const updateMaterialMutation = useMutation({
     mutationFn: ({
       topicId,
@@ -472,24 +595,27 @@ export default function CourseDetailPage() {
   }
 
   function handleMaterialFileSelection(topicId: string, event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files ?? []);
     event.target.value = '';
 
-    if (!file) return;
-    if (!isSupportedMaterialFile(file)) {
-      const ext = file.name.includes('.') ? file.name.split('.').pop()?.toUpperCase() : 'UNKNOWN';
-      setFileFormatWarning({
-        topicId,
-        message: `.${String(ext).toLowerCase()} is not supported. Please upload: ${SUPPORTED_MATERIAL_LABEL}.`,
-      });
-      setTimeout(() => {
-        setFileFormatWarning((w) => (w?.topicId === topicId ? null : w));
-      }, 8000);
-      return;
-    }
+    if (files.length === 0) return;
 
-    setFileFormatWarning((w) => (w?.topicId === topicId ? null : w));
-    uploadMaterialMutation.mutate({ topicId, file });
+    for (const file of files) {
+      if (!isSupportedMaterialFile(file)) {
+        const ext = file.name.includes('.') ? file.name.split('.').pop()?.toUpperCase() : 'UNKNOWN';
+        setFileFormatWarning({
+          topicId,
+          message: `.${String(ext).toLowerCase()} is not supported. Please upload: ${SUPPORTED_MATERIAL_LABEL}.`,
+        });
+        setTimeout(() => {
+          setFileFormatWarning((w) => (w?.topicId === topicId ? null : w));
+        }, 8000);
+        continue;
+      }
+
+      setFileFormatWarning((w) => (w?.topicId === topicId ? null : w));
+      enqueueMaterialFiles(courseId, topicId, [file]);
+    }
   }
 
   if (!courseId) {
@@ -558,10 +684,12 @@ export default function CourseDetailPage() {
                 Open Classroom
               </Link>
             )}
-            <Link to={`/ai-tutor?courseId=${courseId}`} className="btn-secondary flex items-center gap-2 text-sm">
-              <Bot size={16} />
-              Study with AI
-            </Link>
+            {user?.role === 'STUDENT' && (
+              <Link to={`/ai-tutor?courseId=${courseId}`} className="btn-secondary flex items-center gap-2 text-sm">
+                <Bot size={16} />
+                Study with AI
+              </Link>
+            )}
           </div>
         </div>
       </div>
@@ -569,29 +697,108 @@ export default function CourseDetailPage() {
       {!course.isTeaching && course.enrollment && (
         <div className="card mb-6">
           <h2 className="mb-4 text-lg font-semibold">My Scores</h2>
+          {isLabCourse(course) && (
+            <p className="mb-3 max-w-2xl text-xs text-text-muted">
+              Enter or update your own lab marks below. These are stored for your account only and are separate from
+              instructor-uploaded class marks.
+            </p>
+          )}
+          {isLabCourse(course) && course.enrollment?.labScore != null && (
+            <p className="mb-3 max-w-2xl text-sm text-text-secondary">
+              <span className="font-medium text-text-primary">Instructor-recorded lab mark: </span>
+              {course.enrollment.labScore}
+            </p>
+          )}
+          {!isLabCourse(course) && (
+            <p className="mb-3 max-w-2xl text-xs text-text-muted">
+              <strong>Official</strong> shows marks your instructor recorded from classroom uploads. <strong>Your entry</strong>{' '}
+              is optional self-tracking and stays separate unless you save it.
+            </p>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
                   <th className="px-3 py-2 text-left font-medium text-text-secondary">Assessment</th>
-                  <th className="px-3 py-2 text-center font-medium text-text-secondary">Score</th>
+                  {!isLabCourse(course) && (
+                    <th className="px-3 py-2 text-center font-medium text-text-secondary">Official</th>
+                  )}
+                  <th className="px-3 py-2 text-center font-medium text-text-secondary">Your entry</th>
                   <th className="px-3 py-2 text-center font-medium text-text-secondary">Max</th>
                   <th className="px-3 py-2 text-left font-medium text-text-secondary">Status</th>
+                  <th className="px-3 py-2 text-left font-medium text-text-secondary">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {[
-                  { label: 'Class Test 1', score: course.enrollment.ctScore1, max: 20 },
-                  { label: 'Class Test 2', score: course.enrollment.ctScore2, max: 20 },
-                  { label: 'Class Test 3', score: course.enrollment.ctScore3, max: 20 },
-                  { label: 'Lab / Assignment', score: course.enrollment.labScore, max: 40 },
-                ].map((row) => {
-                  const percentage = row.score != null ? Math.round((row.score / row.max) * 100) : null;
+                {buildStudentAssessmentRows(course).map((row) => {
+                  const labField = row.labField;
+                  const theoryField = row.theoryField;
+                  const draftVal = labField
+                    ? labDraft[labField]
+                    : theoryField
+                      ? theoryDraft[theoryField]
+                      : '';
+                  const numericFromDraft =
+                    labField || theoryField
+                      ? draftVal.trim() === ''
+                        ? null
+                        : Number.parseFloat(draftVal)
+                      : null;
+                  const effectiveScore =
+                    labField || theoryField
+                      ? numericFromDraft != null && !Number.isNaN(numericFromDraft)
+                        ? numericFromDraft
+                        : row.score ?? null
+                      : row.score;
+                  const percentage =
+                    effectiveScore != null && !Number.isNaN(effectiveScore)
+                      ? Math.round((effectiveScore / row.max) * 100)
+                      : null;
 
                   return (
-                    <tr key={row.label} className="border-b border-border last:border-0">
+                    <tr
+                      key={labField ?? theoryField ?? row.label}
+                      className="border-b border-border last:border-0"
+                    >
                       <td className="px-3 py-2.5 font-medium">{row.label}</td>
-                      <td className="px-3 py-2.5 text-center">{row.score != null ? row.score : 'Not evaluated yet'}</td>
+                      {!isLabCourse(course) && (
+                        <td className="px-3 py-2.5 text-center text-text-secondary">
+                          {row.officialScore != null && row.officialScore !== undefined ? row.officialScore : '—'}
+                        </td>
+                      )}
+                      <td className="px-3 py-2.5 text-center">
+                        {labField ? (
+                          <input
+                            type="number"
+                            min={0}
+                            max={row.max}
+                            step={0.5}
+                            className="input mx-auto w-24 py-1 text-center text-sm"
+                            value={labDraft[labField]}
+                            onChange={(event) =>
+                              setLabDraft((previous) => ({ ...previous, [labField]: event.target.value }))
+                            }
+                            aria-label={`${row.label} mark`}
+                          />
+                        ) : theoryField ? (
+                          <input
+                            type="number"
+                            min={0}
+                            max={row.max}
+                            step={0.5}
+                            className="input mx-auto w-24 py-1 text-center text-sm"
+                            value={theoryDraft[theoryField]}
+                            onChange={(event) =>
+                              setTheoryDraft((previous) => ({ ...previous, [theoryField]: event.target.value }))
+                            }
+                            aria-label={`${row.label} mark`}
+                          />
+                        ) : row.score != null ? (
+                          row.score
+                        ) : (
+                          'Not evaluated yet'
+                        )}
+                      </td>
                       <td className="px-3 py-2.5 text-center text-text-muted">{row.max}</td>
                       <td className="px-3 py-2.5">
                         {percentage != null ? (
@@ -610,6 +817,49 @@ export default function CourseDetailPage() {
                           <span className="text-xs text-text-muted">Not evaluated yet</span>
                         )}
                       </td>
+                      <td className="px-3 py-2.5">
+                        {labField ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              className="btn-primary py-1 text-xs"
+                              disabled={patchStudentLabMarksMutation.isPending}
+                              onClick={() => saveLabMarkField(labField, row.max)}
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-secondary py-1 text-xs"
+                              disabled={patchStudentLabMarksMutation.isPending}
+                              onClick={() => clearLabMarkField(labField)}
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        ) : theoryField ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              className="btn-primary py-1 text-xs"
+                              disabled={patchStudentTheoryMarksMutation.isPending}
+                              onClick={() => saveTheoryMarkField(theoryField, row.max)}
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-secondary py-1 text-xs"
+                              disabled={patchStudentTheoryMarksMutation.isPending}
+                              onClick={() => clearTheoryMarkField(theoryField)}
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-text-muted">—</span>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -624,8 +874,8 @@ export default function CourseDetailPage() {
           <h2 className="text-lg font-semibold">Course Schedule & Topics ({course.topics?.length || 0})</h2>
           {isEnrolledStudent && !canManageCourse && (
             <p className="mt-1 max-w-2xl text-xs text-text-muted">
-              The class schedule shows shared materials from your instructor’s classroom. Your own files go only on
-              topics you add here (private to you) — not the same as routine scans elsewhere.
+              Shared topics and materials come from your instructor. You can add personal topics for your own notes.
+              Attendance is recorded from class reminders in Notifications, not from topics.
             </p>
           )}
         </div>
@@ -642,7 +892,14 @@ export default function CourseDetailPage() {
 
       {canAddTopicInHeader && showAddTopic && (
         <div className="card mb-4">
-          <h3 className="mb-3 text-sm font-semibold">New Topic</h3>
+          <h3 className="mb-3 text-sm font-semibold">
+            {canManageCourse ? 'New Topic' : 'New personal topic'}
+          </h3>
+          {!canManageCourse && isEnrolledStudent && (
+            <p className="mb-3 text-xs text-text-secondary">
+              Personal topics are visible only to you on this course. They are not the shared class schedule.
+            </p>
+          )}
           <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
             <div>
               <label className="label text-xs">Title *</label>
@@ -719,18 +976,14 @@ export default function CourseDetailPage() {
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-text-muted">
                     <BookOpen size={32} className="mx-auto mb-2" />
-                    <p>
-                      {canAddTopicInHeader
-                        ? 'No topics yet. Add your first topic to get started.'
-                        : 'No topics in this course yet.'}
-                    </p>
+                    <p>{canAddTopicInHeader ? 'No topics yet. Add your first topic to get started.' : 'No topics in this course yet.'}</p>
                   </td>
                 </tr>
               ) : (
                 course.topics.map((topic, index) => {
                   const isExpanded = expandedTopicIds.includes(topic.id);
                   const topicMaterials = topic.materials ?? [];
-                  const isUploadingHere = uploadingTopicId === topic.id;
+                  const topicUploading = courseMaterialUploads.filter((u) => u.topicId === topic.id);
 
                   return (
                     <Fragment key={topic.id}>
@@ -920,25 +1173,14 @@ export default function CourseDetailPage() {
                                   </div>
 
                                   {canModifyTopic(topic) && (
-                                    <label
-                                      className={`btn-secondary inline-flex cursor-pointer items-center gap-2 text-xs ${
-                                        isUploadingHere ? 'pointer-events-none opacity-90' : ''
-                                      }`}
-                                    >
+                                    <label className="btn-secondary inline-flex cursor-pointer items-center gap-2 text-xs">
                                       <Upload size={14} className="shrink-0" />
-                                      {isUploadingHere && (
-                                        <Loader2
-                                          size={14}
-                                          className="shrink-0 animate-spin text-primary"
-                                          aria-label="Uploading"
-                                        />
-                                      )}
-                                      {isUploadingHere ? 'Uploading…' : 'Upload file'}
+                                      Upload file{topicUploading.length > 1 ? 's' : ''}
                                       <input
                                         type="file"
                                         className="hidden"
+                                        multiple
                                         accept=".pdf,.docx,.jpg,.jpeg,.png,.webp,.txt"
-                                        disabled={isUploadingHere}
                                         onChange={(event) => handleMaterialFileSelection(topic.id, event)}
                                       />
                                     </label>
@@ -953,9 +1195,47 @@ export default function CourseDetailPage() {
                                 )}
                               </div>
 
-                              {topicMaterials.length === 0 ? (
+                              {topicUploading.length > 0 && (
+                                <div className="space-y-2">
+                                  {topicUploading.map((u) => (
+                                    <div
+                                      key={u.uploadKey}
+                                      className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-bg-main px-3 py-2 text-sm text-text-secondary"
+                                    >
+                                      {u.phase === 'uploading' ? (
+                                        <>
+                                          <Loader2
+                                            size={16}
+                                            className="shrink-0 animate-spin text-primary"
+                                            aria-hidden
+                                          />
+                                          <span className="font-medium text-text-primary">Uploading…</span>
+                                          <span className="truncate text-xs" title={u.fileName}>
+                                            {u.fileName}
+                                          </span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <span className="text-xs text-danger">
+                                            {u.errorMessage ?? 'Upload failed'} — {u.fileName}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            className="btn-secondary py-1 text-xs"
+                                            onClick={() => void retryMaterialUploadFromIdb(u.uploadKey)}
+                                          >
+                                            Retry
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {topicMaterials.length === 0 && topicUploading.length === 0 ? (
                                 <p className="text-sm text-text-muted">No materials yet</p>
-                              ) : (
+                              ) : topicMaterials.length > 0 ? (
                                 <div className="space-y-2">
                                   {topicMaterials.map((material) => {
                                     const isEditingMaterial = editingMaterialId === material.id;
@@ -1100,7 +1380,7 @@ export default function CourseDetailPage() {
                                     );
                                   })}
                                 </div>
-                              )}
+                              ) : null}
                             </div>
                           </td>
                         </tr>
@@ -1114,159 +1394,41 @@ export default function CourseDetailPage() {
         </div>
       </div>
 
-      {/* ── Student Study Log ─────────────────────────────────────────────── */}
-      {isEnrolledStudent && !canManageCourse && (
+      {isEnrolledStudent && !canManageCourse && course.todayAttendance && (
         <div className="mt-6">
-          {/* Today's attendance status banner */}
-          {course.todayAttendance && (
-            <div
-              className={`mb-4 flex items-center gap-3 rounded-lg border px-4 py-3 text-sm ${
-                course.todayAttendance.isMarked
+          <div
+            className={`flex items-center gap-3 rounded-lg border px-4 py-3 text-sm ${
+              course.todayAttendance.isMarked
+                ? course.todayAttendance.isPresent
                   ? 'border-green-200 bg-green-50 text-green-800'
                   : 'border-amber-200 bg-amber-50 text-amber-800'
-              }`}
-            >
-              <CalendarCheck size={18} className="shrink-0" />
-              <div className="flex-1">
-                <span className="font-medium">
-                  Today's class: {course.todayAttendance.startTime}–{course.todayAttendance.endTime}
-                  {course.todayAttendance.room ? ` · ${course.todayAttendance.room}` : ''}
-                </span>
-                <span className="ml-2 text-xs">
-                  {course.todayAttendance.isMarked
-                    ? course.todayAttendance.isPresent
-                      ? '✓ Attendance marked as present'
-                      : '✓ Attendance recorded'
-                    : '· Log topics below to auto-mark attendance'}
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Study log header */}
-          <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <ClipboardList size={18} className="text-primary" />
-              <h2 className="text-lg font-semibold">My Study Log</h2>
-              <span className="rounded-full bg-bg-main px-2 py-0.5 text-xs text-text-muted">
-                {(course.topics?.filter((t: TopicItem) => t.isPersonal) || []).length} topics logged
+                : 'border-amber-200 bg-amber-50 text-amber-800'
+            }`}
+          >
+            <CalendarCheck size={18} className="shrink-0" />
+            <div className="flex-1">
+              <span className="font-medium">
+                Today&apos;s class: {course.todayAttendance.startTime}–{course.todayAttendance.endTime}
+                {course.todayAttendance.room ? ` · ${course.todayAttendance.room}` : ''}
+              </span>
+              <span className="ml-2 text-xs">
+                {course.todayAttendance.isMarked
+                  ? course.todayAttendance.isPresent
+                    ? '✓ Recorded as attended'
+                    : '✓ Recorded as absent'
+                  : (
+                    <>
+                      {' '}
+                      · Open{' '}
+                      <Link to="/notifications" className="font-medium text-primary hover:underline">
+                        Notifications
+                      </Link>{' '}
+                      after class (I attended, I missed, or class not held)
+                    </>
+                  )}
               </span>
             </div>
-            <button
-              onClick={() => setShowStudyLogForm((prev) => !prev)}
-              className="btn-secondary flex items-center gap-2 text-sm"
-            >
-              <Plus size={15} />
-              Log Topic
-            </button>
           </div>
-
-          {/* Add study-log form */}
-          {showStudyLogForm && (
-            <div className="card mb-4 border-primary/20 bg-primary/5">
-              <h3 className="mb-3 text-sm font-semibold text-primary">Log what you covered today</h3>
-              <p className="mb-3 text-xs text-text-secondary">
-                Logging a topic automatically marks your attendance if{' '}
-                {course.courseCode ?? 'this course'} has a class scheduled today.
-                Multiple topics in one session still count as{' '}
-                <span className="font-medium">1 class attended</span>.
-              </p>
-              <div className="space-y-3">
-                <div>
-                  <label className="label text-xs">Topic Title *</label>
-                  <input
-                    type="text"
-                    className="input"
-                    placeholder="e.g. Mobile IP Protocol, Wireless Networking"
-                    value={studyLogDraft.title}
-                    onChange={(e) => setStudyLogDraft((prev) => ({ ...prev, title: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <label className="label text-xs">Notes (optional)</label>
-                  <textarea
-                    className="input min-h-[60px] py-2 text-sm"
-                    placeholder="Any personal notes about today's class…"
-                    value={studyLogDraft.notes}
-                    onChange={(e) => setStudyLogDraft((prev) => ({ ...prev, notes: e.target.value }))}
-                  />
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    className="btn-primary text-sm"
-                    disabled={!studyLogDraft.title.trim() || addStudyLogMutation.isPending}
-                    onClick={() =>
-                      addStudyLogMutation.mutate({
-                        title: studyLogDraft.title.trim(),
-                        description: studyLogDraft.notes.trim() || undefined,
-                      })
-                    }
-                  >
-                    {addStudyLogMutation.isPending ? (
-                      <span className="flex items-center gap-2">
-                        <Loader2 size={14} className="animate-spin" /> Logging…
-                      </span>
-                    ) : (
-                      'Log & Mark Attendance'
-                    )}
-                  </button>
-                  <button
-                    className="btn-secondary text-sm"
-                    onClick={() => {
-                      setShowStudyLogForm(false);
-                      setStudyLogDraft({ title: '', notes: '' });
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Personal topics list */}
-          {(() => {
-            const personalTopics = (course.topics || []).filter((t: TopicItem) => t.isPersonal);
-            if (personalTopics.length === 0) {
-              return (
-                <div className="rounded-lg border border-dashed border-border py-8 text-center text-sm text-text-muted">
-                  No topics logged yet. Log your first topic to start tracking attendance.
-                </div>
-              );
-            }
-            return (
-              <div className="space-y-2">
-                {personalTopics.map((t: TopicItem) => (
-                  <div
-                    key={t.id}
-                    className="flex items-start gap-3 rounded-lg border border-border bg-bg-card px-4 py-3"
-                  >
-                    <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-green-500" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-text-primary">{t.title}</p>
-                      {t.description && (
-                        <p className="mt-0.5 text-xs text-text-secondary">{t.description}</p>
-                      )}
-                      <p className="mt-1 text-xs text-text-muted">
-                        {t.sessionDate
-                          ? new Date(t.sessionDate).toLocaleDateString(undefined, {
-                              weekday: 'short',
-                              year: 'numeric',
-                              month: 'short',
-                              day: 'numeric',
-                            })
-                          : new Date(t.createdAt).toLocaleDateString(undefined, {
-                              weekday: 'short',
-                              month: 'short',
-                              day: 'numeric',
-                            })}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
         </div>
       )}
     </div>

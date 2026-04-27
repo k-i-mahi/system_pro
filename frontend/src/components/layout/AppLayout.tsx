@@ -1,5 +1,6 @@
 import { useEffect, useCallback } from 'react';
 import { Outlet, Navigate, useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import { useAuthStore } from '@/stores/auth.store';
@@ -8,13 +9,25 @@ import { cn } from '@/lib/utils';
 import { maybeStartOnboardingTour } from '@/lib/onboarding-tour';
 import { useNotificationSocket } from '@/lib/notification-socket';
 import api from '@/lib/api';
+import { registerMaterialUploadQueryClient, resumePersistedMaterialUploads } from '@/stores/material-upload.store';
 
 export default function AppLayout() {
+  const queryClient = useQueryClient();
+  const user = useAuthStore((s) => s.user);
   const { isAuthenticated, setUserFromMe, logout } = useAuthStore();
   const { sidebarCollapsed } = useUIStore();
   const navigate = useNavigate();
 
   useNotificationSocket();
+
+  useEffect(() => {
+    registerMaterialUploadQueryClient(queryClient);
+  }, [queryClient]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user?.id) return;
+    void resumePersistedMaterialUploads();
+  }, [isAuthenticated, user?.id]);
 
   const refreshMe = useCallback(async () => {
     if (!isAuthenticated) return;

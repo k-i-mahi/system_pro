@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.security import hash_password
-from app.models.community import Community, CommunityMember
+from app.models.community import Community, CommunityMember, Thread, ThreadLike, ThreadPost
 from app.models.course import Course
 from app.models.enums import CommunityRole, Role
 from app.models.user import User
@@ -213,25 +214,130 @@ async def update_community(db: AsyncSession, community_id: str, data: dict) -> d
     return _community_to_dict(community, course)
 
 
-async def get_platform_stats(db: AsyncSession) -> dict:
-    from sqlalchemy import func, select
-    role_counts_raw = (await db.execute(
-        select(User.role, func.count()).group_by(User.role)
-    )).all()
-    community_count = await db.scalar(select(func.count()).select_from(Community))
-    recent_raw = (await db.execute(
-        select(User.name, User.email, User.role, User.created_at)
-        .order_by(User.created_at.desc())
-        .limit(10)
-    )).all()
+def _thread_admin_dict(
+    thread: Thread,
+    creator: User | None,
+    course: Course | None,
+    reply_count: int,
+    like_count: int,
+) -> dict:
     return {
-        "roleCounts": {str(r): c for r, c in role_counts_raw},
-        "totalCommunities": community_count,
-        "recentRegistrations": [
-            {"name": u.name, "email": u.email, "role": u.role, "joinedAt": u.created_at.isoformat()}
-            for u in recent_raw
-        ],
+        "id": thread.id,
+        "title": thread.title,
+        "body": thread.body,
+        "tags": thread.tags or [],
+        "courseId": thread.course_id,
+        "course": {"courseCode": course.course_code, "courseName": course.course_name} if course else None,
+        "creator": {"id": creator.id, "name": creator.name, "email": creator.email} if creator else None,
+        "createdAt": thread.created_at,
+        "replyCount": reply_count,
+        "likeCount": like_count,
     }
+
+
+async def list_threads(db: AsyncSession, page: int, limit: int, search: str | None) -> tuple[list[dict], int]:
+    filters = []
+    if search:
+        q = f"%{search.strip()}%"
+        filters.append(or_(Thread.title.ilike(q), Thread.body.ilike(q)))
+    count_stmt = select(func.count(Thread.id))
+    if filters:
+        count_stmt = count_stmt.where(*filters)
+    total = (await db.execute(count_stmt)).scalar_one()
+    stmt = select(Thread)
+    if filters:
+        stmt = stmt.where(*filters)
+    threads = (
+        await db.execute(stmt.order_by(Thread.created_at.desc()).offset((page - 1) * limit).limit(limit))
+    ).scalars().all()
+    out: list[dict] = []
+    for t in threads:
+        creator = await db.get(User, t.creator_id)
+        course = await db.get(Course, t.course_id) if t.course_id else None
+        reply_count = (
+            await db.execute(select(func.count(ThreadPost.id)).where(ThreadPost.thread_id == t.id))
+        ).scalar_one()
+        like_count = (
+            await db.execute(select(func.count(ThreadLike.id)).where(ThreadLike.thread_id == t.id))
+        ).scalar_one()
+        out.append(_thread_admin_dict(t, creator, course, reply_count, like_count))
+    return out, total
+
+
+async def create_thread(db: AsyncSession, data: dict) -> dict:
+    raw = (data.get("creatorUserId") or "").strip()
+    if not raw:
+        raise ValidationError("creatorUserId is required")
+    if "@" in raw:
+        creator = (await db.execute(select(User).where(User.email == raw.lower()))).scalar_one_or_none()
+        if not creator:
+            raise NotFoundError("No user found with that email")
+    else:
+        creator = await db.get(User, raw)
+        if not creator:
+            raise NotFoundError("No user found with that user id")
+    if creator.role != Role.STUDENT:
+        raise ValidationError("Thread creator must be a STUDENT account")
+    if data.get("courseId"):
+        course = await db.get(Course, data["courseId"])
+        if not course:
+            raise NotFoundError("Course not found")
+    thread = Thread(
+        title=data["title"],
+        body=data["body"],
+        course_id=data.get("courseId"),
+        creator_id=creator.id,
+        tags=data.get("tags") or [],
+    )
+    db.add(thread)
+    await db.commit()
+    await db.refresh(thread)
+    course = await db.get(Course, thread.course_id) if thread.course_id else None
+    return _thread_admin_dict(thread, creator, course, 0, 0)
+
+
+async def update_thread(db: AsyncSession, thread_id: str, data: dict) -> dict:
+    thread = await db.get(Thread, thread_id)
+    if not thread:
+        raise NotFoundError("Thread not found")
+    if "courseId" in data:
+        cid = data["courseId"]
+        if cid:
+            course = await db.get(Course, cid)
+            if not course:
+                raise NotFoundError("Course not found")
+            thread.course_id = cid
+        else:
+            thread.course_id = None
+    if "title" in data and data["title"] is not None:
+        thread.title = data["title"]
+    if "body" in data and data["body"] is not None:
+        thread.body = data["body"]
+    if "tags" in data and data["tags"] is not None:
+        thread.tags = data["tags"]
+    await db.commit()
+    await db.refresh(thread)
+    creator = await db.get(User, thread.creator_id)
+    course = await db.get(Course, thread.course_id) if thread.course_id else None
+    reply_count = (
+        await db.execute(select(func.count(ThreadPost.id)).where(ThreadPost.thread_id == thread.id))
+    ).scalar_one()
+    like_count = (
+        await db.execute(select(func.count(ThreadLike.id)).where(ThreadLike.thread_id == thread.id))
+    ).scalar_one()
+    return _thread_admin_dict(thread, creator, course, reply_count, like_count)
+
+
+async def delete_thread(db: AsyncSession, thread_id: str) -> dict:
+    thread = await db.get(Thread, thread_id)
+    if not thread:
+        raise NotFoundError("Thread not found")
+    title = thread.title
+    await db.execute(sql_delete(ThreadPost).where(ThreadPost.thread_id == thread_id))
+    await db.execute(sql_delete(ThreadLike).where(ThreadLike.thread_id == thread_id))
+    await db.delete(thread)
+    await db.commit()
+    return {"message": "Thread deleted", "deleted": {"id": thread_id, "title": title}}
 
 
 async def delete_community(db: AsyncSession, community_id: str) -> dict:

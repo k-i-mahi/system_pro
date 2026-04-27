@@ -16,6 +16,21 @@ logger = logging.getLogger(__name__)
 CANDIDATE_LIMIT = 40
 RRF_K = 60
 
+TERM_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "dvfs": ("dynamic", "voltage", "frequency", "scaling"),
+    "cpu": ("processor",),
+    "processor": ("cpu",),
+    "multicore": ("multi", "core"),
+    "hmca": ("heterogeneous", "multicore", "architecture"),
+}
+
+PHRASE_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "dynamic voltage and frequency scaling": ("dvfs",),
+    "low power": ("power efficient", "energy efficient"),
+    "clock gating": ("clock", "gating"),
+    "power gating": ("power", "gating"),
+}
+
 
 @dataclass
 class RetrievedChunk:
@@ -47,14 +62,73 @@ def _normalize_query(query: str) -> str:
     return normalized
 
 
-def _query_terms(query: str) -> list[str]:
+def _base_query_terms(query: str) -> list[str]:
     stop = {
         "the", "a", "an", "is", "are", "was", "were", "to", "for", "of", "in", "on",
         "and", "or", "with", "by", "from", "at", "as", "this", "that", "it", "be",
         "can", "i", "we", "you", "do", "does", "did", "how", "what", "why", "when",
     }
-    terms = [t for t in _normalize_query(query).split(" ") if len(t) > 1 and t not in stop]
+    normalized = _normalize_query(query)
+    terms = [t for t in normalized.split(" ") if len(t) > 1 and t not in stop]
     return terms[:24]
+
+
+def _query_terms(query: str) -> list[str]:
+    normalized = _normalize_query(query)
+    return _expand_terms(_base_query_terms(query), normalized, max_terms=24)
+
+
+def _expand_terms(terms: list[str], normalized_query: str, max_terms: int = 24) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def add(token: str) -> None:
+        t = (token or "").strip().lower()
+        if not t or len(t) <= 1 or t in seen:
+            return
+        seen.add(t)
+        out.append(t)
+
+    for term in terms:
+        add(term)
+        for syn in TERM_SYNONYMS.get(term, ()):  # token-level expansion
+            add(syn)
+
+    for phrase, replacements in PHRASE_SYNONYMS.items():
+        if phrase in normalized_query:
+            for rep in replacements:
+                for token in _normalize_query(rep).split(" "):
+                    add(token)
+
+    return out[:max_terms]
+
+
+def _bm25_query_variants(query: str) -> list[str]:
+    trimmed = (query or "").strip()
+    if not trimmed:
+        return []
+
+    normalized = _normalize_query(trimmed)
+    base_terms = _base_query_terms(trimmed)
+    expanded_terms = _expand_terms(base_terms, normalized, max_terms=28)
+    extra = [t for t in expanded_terms if t not in set(base_terms)]
+
+    variants: list[str] = [trimmed]
+    if normalized and normalized != trimmed.lower():
+        variants.append(normalized)
+    if extra:
+        variants.append(f"{trimmed} {' '.join(extra[:8])}")
+
+    # Keep order stable and avoid duplicates.
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in variants:
+        key = item.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique[:3]
 
 
 def _lexical_overlap_score(terms: list[str], text_value: str) -> float:
@@ -230,7 +304,7 @@ def _rerank_and_select(fused: list[RetrievedChunk], query: str, top_k: int) -> l
         title_bonus = 0.12 * _lexical_overlap_score(terms, c.material_title)
         heading_bonus = 0.10 * _lexical_overlap_score(terms, c.heading or "")
         semantic = c.fused_score / max_fused
-        combined = (0.62 * semantic) + (0.28 * lexical) + title_bonus + heading_bonus
+        combined = (0.48 * semantic) + (0.42 * lexical) + title_bonus + heading_bonus
         rescored.append((combined, c))
 
     rescored.sort(key=lambda item: item[0], reverse=True)
@@ -239,7 +313,8 @@ def _rerank_and_select(fused: list[RetrievedChunk], query: str, top_k: int) -> l
     selected: list[RetrievedChunk] = []
     seen_fingerprints: set[str] = set()
     per_material: dict[str, int] = {}
-    max_per_material = 2
+    unique_materials = {c.material_id for c in fused}
+    max_per_material = top_k if len(unique_materials) <= 1 else 3
 
     min_chars = 22
     for _, chunk in rescored:
@@ -295,22 +370,38 @@ async def retrieve_chunks(
         logger.warning("Embedding failed: %s", exc)
         query_vec = []
 
+    bm25_variants = _bm25_query_variants(trimmed)
+
     if query_vec:
         vec_literal = _vector_literal(query_vec)
         vector_hits, bm25_hits = await _vector_search(db, vec_literal, material_ids, CANDIDATE_LIMIT), []
         try:
-            normalized = _normalize_query(trimmed)
-            bm25_hits = await _bm25_search(db, trimmed, material_ids, CANDIDATE_LIMIT)
-            if normalized and normalized != trimmed.lower():
-                extra_hits = await _bm25_search(db, normalized, material_ids, CANDIDATE_LIMIT // 2)
-                seen = {h["id"] for h in bm25_hits}
-                bm25_hits.extend([h for h in extra_hits if h["id"] not in seen])
+            seen_ids: set[str] = set()
+            for i, variant in enumerate(bm25_variants):
+                limit = CANDIDATE_LIMIT if i == 0 else (CANDIDATE_LIMIT // 2)
+                extra_hits = await _bm25_search(db, variant, material_ids, limit)
+                for hit in extra_hits:
+                    hid = hit["id"]
+                    if hid in seen_ids:
+                        continue
+                    seen_ids.add(hid)
+                    bm25_hits.append(hit)
         except Exception as exc:
             logger.warning("BM25 search failed: %s", exc)
         fused = _rrf(vector_hits, bm25_hits)
     else:
         try:
-            bm25_hits = await _bm25_search(db, trimmed, material_ids, CANDIDATE_LIMIT)
+            bm25_hits: list[dict] = []
+            seen_ids: set[str] = set()
+            for i, variant in enumerate(bm25_variants):
+                limit = CANDIDATE_LIMIT if i == 0 else (CANDIDATE_LIMIT // 2)
+                extra_hits = await _bm25_search(db, variant, material_ids, limit)
+                for hit in extra_hits:
+                    hid = hit["id"]
+                    if hid in seen_ids:
+                        continue
+                    seen_ids.add(hid)
+                    bm25_hits.append(hit)
             fused = [
                 RetrievedChunk(
                     id=r["id"], material_id=r["materialId"], material_title=r["materialTitle"],

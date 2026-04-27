@@ -47,5 +47,58 @@ async def upload_file(file_bytes: bytes, folder: str) -> dict:
 
 
 async def delete_file(public_id: str) -> None:
+    """Legacy best-effort destroy (logs only at call sites). Prefer ``destroy_public_id``."""
     _ensure_configured()
     await asyncio.to_thread(cloudinary.uploader.destroy, public_id)
+
+
+def cloudinary_is_configured() -> bool:
+    return bool(settings.CLOUDINARY_CLOUD_NAME and settings.CLOUDINARY_API_KEY and settings.CLOUDINARY_API_SECRET)
+
+
+async def destroy_public_id_strict(public_id: str, *, attempts: int = 2) -> None:
+    """
+    Remove an asset from Cloudinary and **fail** if the API reports an error.
+
+    Accepted results: ``ok`` (deleted) or ``not found`` (already gone).
+
+    **Policy:** Used before DB deletes so we do not orphan hosted files. If Cloudinary
+    is not configured in this environment, raises ``ValidationError`` — uploads should
+    not have created ``public_id`` in that case; operators must fix config or remove rows manually.
+
+    Retries once on transient failure; then raises ``ServiceUnavailableError`` (503).
+    """
+    from app.core.exceptions import ServiceUnavailableError, ValidationError
+
+    if not public_id or not str(public_id).strip():
+        return
+    if not cloudinary_is_configured():
+        raise ValidationError(
+            "Cloudinary is not configured; refusing to delete material without confirming asset removal. "
+            "Set CLOUDINARY_* env vars or remove the row manually.",
+            code="CLOUDINARY_NOT_CONFIGURED",
+        )
+    _ensure_configured()
+
+    last_exc: Exception | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+
+            def _destroy() -> dict:
+                return cloudinary.uploader.destroy(public_id)
+
+            result = await asyncio.to_thread(_destroy)
+            res = (result or {}).get("result")
+            if res in ("ok", "not found"):
+                return
+            last_exc = RuntimeError(f"Cloudinary destroy returned: {result!r}")
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("Cloudinary destroy attempt %s failed for %s: %s", attempt + 1, public_id, exc)
+            if attempt < attempts - 1:
+                await asyncio.sleep(0.35 * (attempt + 1))
+
+    raise ServiceUnavailableError(
+        f"Could not delete Cloudinary asset {public_id!r} after {attempts} attempt(s). "
+        "No database row was removed. Retry later or delete the asset in Cloudinary manually."
+    ) from last_exc

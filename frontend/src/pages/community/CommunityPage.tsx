@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { MessageSquare, ThumbsUp, Plus, X, ChevronRight, School, Users, GraduationCap } from 'lucide-react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useParams } from 'react-router-dom';
 import api from '@/lib/api';
 import { useAuthStore } from '@/stores/auth.store';
 import { isStudent as checkIsStudent, isTutor as checkIsTutor } from '@/lib/rbac';
@@ -12,12 +12,14 @@ type MainTab = 'threads' | 'classrooms';
 
 export default function CommunityPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { threadId: threadIdParam } = useParams<{ threadId?: string }>();
   const user = useAuthStore((s) => s.user);
   const isStudent = checkIsStudent(user);
   const [mainTab, setMainTab] = useState<MainTab>('classrooms');
   const [tab, setTab] = useState<'all' | 'my-courses'>('all');
   const [showNew, setShowNew] = useState(false);
-  const [selectedThread, setSelectedThread] = useState<string | null>(null);
+  const selectedThread = threadIdParam ?? null;
   const [newThread, setNewThread] = useState({ title: '', body: '', tags: '' });
   const [replyContent, setReplyContent] = useState('');
 
@@ -25,9 +27,13 @@ export default function CommunityPage() {
   useEffect(() => {
     if (!isStudent) {
       setMainTab('classrooms');
-      setSelectedThread(null);
+      if (threadIdParam) navigate('/community', { replace: true });
     }
-  }, [isStudent]);
+  }, [isStudent, threadIdParam, navigate]);
+
+  useEffect(() => {
+    if (isStudent && threadIdParam) setMainTab('threads');
+  }, [isStudent, threadIdParam]);
 
   const { data: threads = [], isLoading } = useQuery({
     queryKey: ['threads', tab],
@@ -51,11 +57,13 @@ export default function CommunityPage() {
           .map((t) => t.trim())
           .filter(Boolean),
       }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['threads'] });
       setShowNew(false);
       setNewThread({ title: '', body: '', tags: '' });
       toast.success('Thread created');
+      const id = res?.data?.data?.id;
+      if (id) navigate(`/community/threads/${id}`);
     },
   });
 
@@ -81,7 +89,8 @@ export default function CommunityPage() {
     return (
       <div className="max-w-3xl">
         <button
-          onClick={() => setSelectedThread(null)}
+          type="button"
+          onClick={() => navigate('/community')}
           className="mb-4 flex items-center gap-2 text-sm text-text-secondary transition-colors hover:text-primary"
         >
           ← Back to threads
@@ -289,7 +298,8 @@ export default function CommunityPage() {
           {threads.map((thread: any) => (
             <button
               key={thread.id}
-              onClick={() => setSelectedThread(thread.id)}
+              type="button"
+              onClick={() => navigate(`/community/threads/${thread.id}`)}
               className="card w-full text-left hover:shadow-md transition-shadow flex items-center gap-4"
             >
               <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-white text-sm font-medium shrink-0">
@@ -342,8 +352,18 @@ function ClassroomsSection() {
     department: '',
     university: user?.universityName || '',
   });
-  const [joinTarget, setJoinTarget] = useState<string | null>(null);
-  const [joinForm, setJoinForm] = useState({ rollNumber: '', session: '', department: '' });
+  const [joinTarget, setJoinTarget] = useState<{
+    id: string;
+    university: string;
+    session: string;
+    department: string;
+  } | null>(null);
+  const [joinForm, setJoinForm] = useState({
+    rollNumber: '',
+    session: '',
+    department: '',
+    university: '',
+  });
   const isStudent = checkIsStudent(user);
 
   const { data: communities = [], isLoading } = useQuery({
@@ -377,7 +397,7 @@ function ClassroomsSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['communities'] });
       setJoinTarget(null);
-      setJoinForm({ rollNumber: '', session: '', department: '' });
+      setJoinForm({ rollNumber: '', session: '', department: '', university: '' });
       toast.success('Joined classroom');
     },
     onError: (err: any) =>
@@ -420,33 +440,6 @@ function ClassroomsSection() {
       )}
 
       {/* Sub-tabs */}
-      {isTutor && (
-        <div className="card mb-4 border border-primary/10 bg-primary-light/30">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h3 className="text-base font-semibold text-text-primary">Tutor workflow</h3>
-              <p className="mt-1 text-sm text-text-secondary">
-                Create one classroom per course section, using the same course code students already have in their routine or course list.
-              </p>
-            </div>
-            <div className="grid gap-2 text-sm text-text-secondary sm:grid-cols-3">
-              <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
-                <p className="font-medium text-text-primary">1. Match course code</p>
-                <p className="mt-1 text-xs">Matching codes connect this classroom to the shared course page.</p>
-              </div>
-              <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
-                <p className="font-medium text-text-primary">2. Students join once</p>
-                <p className="mt-1 text-xs">Their roll, department, and session identify them for marks.</p>
-              </div>
-              <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
-                <p className="font-medium text-text-primary">3. Update once</p>
-                <p className="mt-1 text-xs">Marks, announcements, and materials reflect to students automatically.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="flex gap-2 mb-4">
         <button
           onClick={() => setClassroomTab('my')}
@@ -511,7 +504,8 @@ function ClassroomsSection() {
                 <>
                   Classrooms are <strong className="font-medium text-text-primary">not created automatically</strong> for
                   each course. Your instructor creates one and ties it to the course code; you join from{' '}
-                  <span className="font-medium">Available</span> using the roll, session, and department on record.
+                  <span className="font-medium">Available</span> using roll, session, department, and the same university
+                  name the instructor set for the classroom.
                 </>
               ) : (
                 'Create a classroom and match the course code to your students’ course list so it links to their workspace.'
@@ -533,6 +527,11 @@ function ClassroomsSection() {
                     <span className="badge bg-primary-light text-primary text-xs">{c.courseCode}</span>
                     <span className="badge bg-bg-main text-text-muted text-xs">{c.session}</span>
                     <span className="badge bg-bg-main text-text-muted text-xs">{c.department}</span>
+                    {c.university && (
+                      <span className="badge bg-bg-main text-text-muted text-xs max-w-[200px] truncate" title={c.university}>
+                        {c.university}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-1 text-text-muted text-sm">
@@ -541,7 +540,21 @@ function ClassroomsSection() {
               </div>
               {classroomTab === 'eligible' && (
                 <button
-                  onClick={(e) => { e.stopPropagation(); setJoinTarget(c.id); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setJoinTarget({
+                      id: c.id,
+                      university: c.university ?? '',
+                      session: c.session ?? '',
+                      department: c.department ?? '',
+                    });
+                    setJoinForm({
+                      rollNumber: user?.rollNumber?.trim() ?? '',
+                      session: (c.session ?? '').trim(),
+                      department: (c.department ?? '').trim(),
+                      university: (c.university ?? '').trim(),
+                    });
+                  }}
                   className="btn-primary w-full mt-3 text-sm"
                 >
                   Join Classroom
@@ -558,27 +571,46 @@ function ClassroomsSection() {
           <div className="card w-full max-w-sm mx-4" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-semibold text-lg mb-1">Join Classroom</h3>
             <p className="text-sm text-text-secondary mb-4">
-              Enter your academic details. They must match the classroom's settings.
+              Enter your academic details. University, session, and department must match what your instructor set for
+              this classroom (spacing and letter case are ignored).
             </p>
             <div className="space-y-3">
+              <div>
+                <label className="label">University</label>
+                <input
+                  className="input"
+                  placeholder="e.g. Khulna University of Engineering and Technology"
+                  value={joinForm.university}
+                  onChange={(e) => setJoinForm((p) => ({ ...p, university: e.target.value }))}
+                />
+                <p className="mt-1 text-xs text-text-muted">
+                  Expected for this room: <span className="font-medium text-text-secondary">{joinTarget.university}</span>
+                </p>
+              </div>
               <div>
                 <label className="label">Roll Number</label>
                 <input className="input" placeholder="e.g. 2301001" value={joinForm.rollNumber} onChange={(e) => setJoinForm((p) => ({ ...p, rollNumber: e.target.value }))} />
               </div>
               <div>
                 <label className="label">Session</label>
-                <input className="input" placeholder="e.g. 2023-2027" value={joinForm.session} onChange={(e) => setJoinForm((p) => ({ ...p, session: e.target.value }))} />
+                <input className="input" placeholder="e.g. 2k21" value={joinForm.session} onChange={(e) => setJoinForm((p) => ({ ...p, session: e.target.value }))} />
               </div>
               <div>
                 <label className="label">Department</label>
-                <input className="input" placeholder="e.g. Computer Science" value={joinForm.department} onChange={(e) => setJoinForm((p) => ({ ...p, department: e.target.value }))} />
+                <input className="input" placeholder="e.g. CSE" value={joinForm.department} onChange={(e) => setJoinForm((p) => ({ ...p, department: e.target.value }))} />
               </div>
             </div>
             <div className="flex gap-2 mt-4">
               <button
-                onClick={() => joinMutation.mutate({ id: joinTarget, body: joinForm })}
+                onClick={() => joinMutation.mutate({ id: joinTarget.id, body: joinForm })}
                 className="btn-primary flex-1"
-                disabled={!joinForm.rollNumber || !joinForm.session || !joinForm.department || joinMutation.isPending}
+                disabled={
+                  !joinForm.rollNumber ||
+                  !joinForm.session ||
+                  !joinForm.department ||
+                  !joinForm.university ||
+                  joinMutation.isPending
+                }
               >
                 {joinMutation.isPending ? 'Joining...' : 'Join'}
               </button>

@@ -34,18 +34,11 @@ async def connect(sid: str, environ: dict, auth: dict | None = None) -> bool:
 
         # Emit current unread count so the header badge syncs immediately.
         try:
-            from sqlalchemy import func, select
             from app.db.session import AsyncSessionLocal
-            from app.models.misc import Notification as NotifModel
+            from app.services.notifications_service import get_visible_unread_count
+
             async with AsyncSessionLocal() as db:
-                count = (
-                    await db.execute(
-                        select(func.count()).select_from(NotifModel).where(
-                            NotifModel.user_id == user_id,
-                            NotifModel.is_read.is_(False),
-                        )
-                    )
-                ).scalar_one()
+                count = await get_visible_unread_count(db, user_id)
             await sio.emit("notification:count", {"count": count}, room=f"user:{user_id}")
         except Exception as exc:
             logger.warning("Failed to emit unread count on connect: %s", exc)
@@ -73,3 +66,24 @@ async def emit_course_analytics_updated(course_id: str) -> None:
         await sio.emit("analytics:course-updated", {"courseId": course_id})
     except Exception as exc:
         logger.warning("Failed to emit analytics update for course %s: %s", course_id, exc)
+
+
+async def emit_routine_updated(course_id: str) -> None:
+    """Notify clients to refetch schedule / my-courses after slots change (e.g. manual Add Course)."""
+    try:
+        await sio.emit("routine:updated", {"courseId": course_id})
+    except Exception as exc:
+        logger.warning("Failed to emit routine update for course %s: %s", course_id, exc)
+
+
+async def emit_community_updated(community_id: str, course_id: str) -> None:
+    """Notify clients to refetch classroom detail / lists (e.g. student joined)."""
+    try:
+        await sio.emit("community:updated", {"communityId": community_id, "courseId": course_id})
+    except Exception as exc:
+        logger.warning(
+            "Failed to emit community update community=%s course=%s: %s",
+            community_id,
+            course_id,
+            exc,
+        )

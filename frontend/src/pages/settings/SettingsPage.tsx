@@ -377,15 +377,17 @@ export default function SettingsPage() {
                 </button>
               </div>
 
-              <div className="card h-fit">
-                <h3 className="font-semibold">Account</h3>
-                <p className="mt-2 text-sm text-text-secondary">
-                  Update your profile, avatar, academic details, and account information from the dedicated account page.
-                </p>
-                <Link to="/profile" className="btn-secondary mt-4 inline-flex">
-                  Open Account Section
-                </Link>
-              </div>
+              {user?.role !== 'TUTOR' && (
+                <div className="card h-fit">
+                  <h3 className="font-semibold">Account</h3>
+                  <p className="mt-2 text-sm text-text-secondary">
+                    Update your profile, avatar, academic details, and account information from the dedicated account page.
+                  </p>
+                  <Link to="/profile" className="btn-secondary mt-4 inline-flex">
+                    Open Account Section
+                  </Link>
+                </div>
+              )}
             </div>
           )}
 

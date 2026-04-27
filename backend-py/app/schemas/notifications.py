@@ -12,7 +12,7 @@ class PaginationQuery(BaseModel):
 
 class ClassResponseRequest(BaseModel):
     notificationId: str
-    action: Literal['attended', 'missed'] = 'attended'
+    action: Literal['attended', 'missed', 'class_not_held'] = 'attended'
     topicCovered: str | None = Field(default=None, max_length=200)
     materialNeeded: bool = False
     materialRequest: str | None = Field(default=None, max_length=500)

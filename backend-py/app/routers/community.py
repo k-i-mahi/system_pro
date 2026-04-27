@@ -1,6 +1,6 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.core.deps import CurrentUserIdDep, DBDep, get_current_user_id, require_role
 from app.core.exceptions import ValidationError
@@ -12,11 +12,28 @@ from app.schemas.community import (
 )
 from app.services import community_service
 
-_ACCEPTED_SPREADSHEET = {
-    "text/csv",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.ms-excel",
-}
+# Path B: marks extraction is CSV/XLSX only (openpyxl). PDF and legacy .xls are rejected.
+_REJECTED_MARKS_CT = frozenset({"application/pdf", "application/vnd.ms-excel"})
+
+
+def _validate_marks_upload_file(file: UploadFile) -> None:
+    name = (file.filename or "").lower()
+    if name.endswith(".pdf") or name.endswith(".xls"):
+        raise ValidationError(
+            "Marks upload supports .csv and .xlsx only. PDF and .xls are not supported for extraction.",
+            code="INVALID_FILE_TYPE",
+        )
+    if not (name.endswith(".csv") or name.endswith(".xlsx")):
+        raise ValidationError(
+            "Please upload a .csv or .xlsx marks file.",
+            code="INVALID_FILE_TYPE",
+        )
+    ct = file.content_type or ""
+    if ct in _REJECTED_MARKS_CT:
+        raise ValidationError(
+            "This file type is not supported for marks extraction. Use .csv or .xlsx.",
+            code="INVALID_FILE_TYPE",
+        )
 
 router = APIRouter(dependencies=[Depends(get_current_user_id)])
 
@@ -116,7 +133,9 @@ async def get_community(community_id: str, db: DBDep, user_id: CurrentUserIdDep)
 
 @router.post("/{community_id}/join")
 async def join_community(community_id: str, body: JoinCommunityRequest, db: DBDep, user_id: CurrentUserIdDep):
-    data = await community_service.join_community(db, community_id, user_id, body.rollNumber, body.session, body.department)
+    data = await community_service.join_community(
+        db, community_id, user_id, body.rollNumber, body.session, body.department, body.university
+    )
     return created(data)
 
 
@@ -148,7 +167,7 @@ async def create_announcement(
 
 @router.get("/{community_id}/announcements")
 async def list_announcements(community_id: str, db: DBDep, user_id: CurrentUserIdDep, page: int = 1, limit: int = 20):
-    items, total = await community_service.list_announcements(db, community_id, page, limit)
+    items, total = await community_service.list_announcements(db, community_id, user_id, page, limit)
     return success(items, meta={"page": page, "limit": limit, "total": total})
 
 
@@ -168,11 +187,16 @@ async def upload_marks(
     community_id: str, db: DBDep, user_id: CurrentUserIdDep,
     _role: str = require_role(Role.TUTOR, Role.ADMIN),
     file: UploadFile = File(...),
+    assessment_label: str | None = Form(
+        None,
+        description="Optional label shown to students (e.g. CT 1, Class Test 2).",
+    ),
 ):
-    if file.content_type not in _ACCEPTED_SPREADSHEET:
-        raise ValidationError("Please upload a spreadsheet file (.csv, .xlsx, .xls)", code="INVALID_FILE_TYPE")
+    _validate_marks_upload_file(file)
     file_data = await file.read()
-    data = await community_service.upload_marks(db, community_id, user_id, file_data, file.filename or "upload")
+    data = await community_service.upload_marks(
+        db, community_id, user_id, file_data, file.filename or "upload", assessment_label
+    )
     return success(data)
 
 

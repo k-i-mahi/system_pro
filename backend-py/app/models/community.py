@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum as SAEnum, ForeignKey, JSON, String, func
+from sqlalchemy import Boolean, DateTime, Enum as SAEnum, ForeignKey, JSON, String, func
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -51,6 +51,7 @@ class Announcement(Base):
     title: Mapped[str] = mapped_column(String)
     body: Mapped[str] = mapped_column(String)
     file_url: Mapped[str | None] = mapped_column("fileUrl", String, nullable=True)
+    student_feed_only: Mapped[bool] = mapped_column("studentFeedOnly", Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column("createdAt", DateTime(timezone=True), server_default=func.now())
 
 

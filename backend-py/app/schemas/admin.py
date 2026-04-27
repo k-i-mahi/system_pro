@@ -67,6 +67,7 @@ class AdminCreateCommunityRequest(BaseModel):
     session: str = Field(min_length=1, max_length=50)
     department: str = Field(min_length=1, max_length=120)
     university: str = Field(min_length=1, max_length=200)
+    ownerUserId: Optional[str] = None
 
 
 class AdminUpdateCommunityRequest(BaseModel):
@@ -76,3 +77,18 @@ class AdminUpdateCommunityRequest(BaseModel):
     session: Optional[str] = Field(default=None, min_length=1, max_length=50)
     department: Optional[str] = Field(default=None, min_length=1, max_length=120)
     university: Optional[str] = Field(default=None, min_length=1, max_length=200)
+
+
+class AdminCreateThreadRequest(BaseModel):
+    creatorUserId: str = Field(min_length=1)
+    title: str = Field(min_length=1, max_length=500)
+    body: str = Field(min_length=1)
+    courseId: Optional[str] = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class AdminUpdateThreadRequest(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    body: Optional[str] = None
+    courseId: Optional[str] = None
+    tags: Optional[list[str]] = None

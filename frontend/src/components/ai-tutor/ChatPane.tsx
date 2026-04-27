@@ -4,20 +4,21 @@ import toast from 'react-hot-toast';
 import { useAuthStore } from '@/stores/auth.store';
 import { Button } from '../ui/button';
 import { Skeleton } from '../ui/skeleton';
-import { StrategyBadge, type TutorStrategy } from './StrategyBadge';
-import { TutorTrace, type TutorTurn } from './TutorTrace';
+import { StrategyBadge } from './StrategyBadge';
+import { TutorTrace } from './TutorTrace';
+import { useTutorSessionStore } from '@/stores/tutor-session.store';
 import { cn } from '../../lib/utils';
+import type { ChatMessage } from './chat-types';
 
-export interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  strategy?: TutorStrategy;
-  trace?: TutorTurn[];
-}
+export type { ChatMessage } from './chat-types';
+
+const EMPTY_CHAT: ChatMessage[] = [];
 
 interface Props {
   topicId?: string;
   courseId?: string;
+  /** Stable key (e.g. courseId:topicId) for persisted chat history. */
+  persistenceKey: string;
   systemPrimer?: string;
   initialPrompt?: string;
   emptyStateTitle?: string;
@@ -29,6 +30,7 @@ interface Props {
 export function ChatPane({
   topicId,
   courseId,
+  persistenceKey,
   systemPrimer,
   initialPrompt,
   emptyStateTitle = 'How can I help you study?',
@@ -36,8 +38,10 @@ export function ChatPane({
   quickActions = [],
   endpoint = '/api/ai-tutor/chat',
 }: Props) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
+  const messages = useTutorSessionStore((s) => s.byKey[persistenceKey]?.chatMessages ?? EMPTY_CHAT);
+  const input = useTutorSessionStore((s) => s.byKey[persistenceKey]?.chatInput ?? '');
+  const setMessages = useTutorSessionStore((s) => s.setChatMessages);
+  const setChatInput = useTutorSessionStore((s) => s.setChatInput);
   const [streaming, setStreaming] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -64,8 +68,8 @@ export function ChatPane({
       { role: 'user', content: prompt },
       { role: 'assistant', content: '' },
     ];
-    setMessages(nextMessages);
-    setInput('');
+    setMessages(persistenceKey, nextMessages);
+    setChatInput(persistenceKey, '');
     setStreaming(true);
 
     const controller = new AbortController();
@@ -113,7 +117,7 @@ export function ChatPane({
             const parsed = JSON.parse(data);
             if (typeof parsed.content === 'string') {
               accumulated += parsed.content;
-              setMessages((prev) => {
+              setMessages(persistenceKey, (prev) => {
                 const updated = [...prev];
                 updated[updated.length - 1] = {
                   ...updated[updated.length - 1],
@@ -123,7 +127,7 @@ export function ChatPane({
               });
             }
             if (parsed.strategy) {
-              setMessages((prev) => {
+              setMessages(persistenceKey, (prev) => {
                 const updated = [...prev];
                 updated[updated.length - 1] = {
                   ...updated[updated.length - 1],
@@ -133,7 +137,7 @@ export function ChatPane({
               });
             }
             if (parsed.trace) {
-              setMessages((prev) => {
+              setMessages(persistenceKey, (prev) => {
                 const updated = [...prev];
                 updated[updated.length - 1] = {
                   ...updated[updated.length - 1],
@@ -150,7 +154,7 @@ export function ChatPane({
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
         toast.error('Failed to get AI response');
-        setMessages((prev) => prev.slice(0, -2));
+        setMessages(persistenceKey, (prev) => prev.slice(0, -2));
       }
     } finally {
       setStreaming(false);
@@ -238,7 +242,7 @@ export function ChatPane({
           className="input flex-1"
           placeholder="Ask your AI tutor…"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => setChatInput(persistenceKey, e.target.value)}
           disabled={streaming}
           aria-label="Chat input"
         />

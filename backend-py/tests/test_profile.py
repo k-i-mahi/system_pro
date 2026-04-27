@@ -32,14 +32,14 @@ async def client():
 
 @pytest.mark.asyncio
 async def test_get_profile_requires_auth(client: AsyncClient) -> None:
-    r = await client.get(BASE + "/")
+    r = await client.get(BASE)
     assert r.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_get_profile(client: AsyncClient) -> None:
     token = await _token(client)
-    r = await client.get(BASE + "/", headers={"Authorization": f"Bearer {token}"})
+    r = await client.get(BASE, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     data = r.json()["data"]
     assert "id" in data
@@ -51,7 +51,7 @@ async def test_get_profile(client: AsyncClient) -> None:
 async def test_update_profile(client: AsyncClient) -> None:
     token = await _token(client)
     r = await client.patch(
-        BASE + "/",
+        BASE,
         json={"bio": "Test bio from pytest"},
         headers={"Authorization": f"Bearer {token}"},
     )

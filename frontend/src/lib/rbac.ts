@@ -13,4 +13,4 @@ export const canManageClassroom = (
 export const canUploadMaterial = (u?: User | null): boolean => isTutor(u);
 export const canViewEvalPage = (u?: User | null): boolean => isTutor(u);
 export const canUseAdminPanel = (u?: User | null): boolean => isAdmin(u);
-export const canUseAiTutor = (u?: User | null): boolean => !isAdmin(u);
+export const canUseAiTutor = (u?: User | null): boolean => isStudent(u);

@@ -37,6 +37,20 @@ const mockNotifications = [
     isRead: true,
     createdAt: new Date().toISOString(),
   },
+  {
+    id: 'n5',
+    type: 'MESSAGE',
+    title: 'Pat liked your thread',
+    body: 'Someone appreciated your post.',
+    isRead: false,
+    createdAt: new Date().toISOString(),
+    metadata: {
+      kind: 'THREAD_LIKE',
+      threadId: 'thread-99',
+      courseId: 'course-1',
+      deepLink: '/community/threads/thread-99',
+    },
+  },
 ];
 
 vi.mock('../../src/lib/api', () => ({
@@ -83,7 +97,7 @@ describe('NotificationsPage', () => {
   it('shows unread count', async () => {
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText('2 unread')).toBeInTheDocument();
+      expect(screen.getByText('3 unread')).toBeInTheDocument();
     });
   });
 
@@ -91,6 +105,14 @@ describe('NotificationsPage', () => {
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Mark all as read')).toBeInTheDocument();
+    });
+  });
+
+  it('shows Open thread for thread notification deep links', async () => {
+    renderPage();
+    await waitFor(() => {
+      const link = screen.getByRole('link', { name: 'Open thread' });
+      expect(link).toHaveAttribute('href', '/community/threads/thread-99');
     });
   });
 

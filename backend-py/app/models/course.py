@@ -42,6 +42,15 @@ class Enrollment(Base):
     ct_score2: Mapped[float | None] = mapped_column("ctScore2", Float, nullable=True)
     ct_score3: Mapped[float | None] = mapped_column("ctScore3", Float, nullable=True)
     lab_score: Mapped[float | None] = mapped_column("labScore", Float, nullable=True)
+    # Student self-tracked lab marks (LAB courses only in product); never written by mark upload / tutor analytics.
+    student_lab_test: Mapped[float | None] = mapped_column("studentLabTest", Float, nullable=True)
+    student_lab_quiz: Mapped[float | None] = mapped_column("studentLabQuiz", Float, nullable=True)
+    student_lab_assignment: Mapped[float | None] = mapped_column("studentLabAssignment", Float, nullable=True)
+    # Student self-entered theory marks (Path B); separate from instructor ctScore / labScore.
+    student_theory_ct1: Mapped[float | None] = mapped_column("studentTheoryCt1", Float, nullable=True)
+    student_theory_ct2: Mapped[float | None] = mapped_column("studentTheoryCt2", Float, nullable=True)
+    student_theory_ct3: Mapped[float | None] = mapped_column("studentTheoryCt3", Float, nullable=True)
+    student_theory_assignment: Mapped[float | None] = mapped_column("studentTheoryAssignment", Float, nullable=True)
 
 
 class ScheduleSlot(Base):
@@ -72,8 +81,7 @@ class Topic(Base):
         SAEnum(TopicStatus, name="TopicStatus", create_type=False), default=TopicStatus.NOT_STARTED
     )
     created_at: Mapped[datetime] = mapped_column("createdAt", DateTime(timezone=True), server_default=func.now())
-    # Personal topics are created by students for their own study log.
-    # They are private (visible only to the creator) and trigger attendance auto-marking.
+    # Personal topics are student-owned notes (private on the course page except to the owner).
     is_personal: Mapped[bool] = mapped_column("isPersonal", Boolean, default=False)
     created_by: Mapped[str | None] = mapped_column("createdBy", String, nullable=True)
 

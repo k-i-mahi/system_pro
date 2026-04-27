@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { useTutorSessionStore } from '@/stores/tutor-session.store';
+import { clearMaterialUploadSessionForUser } from '@/stores/material-upload.store';
 
 export type UserRole = 'STUDENT' | 'TUTOR' | 'ADMIN';
 
@@ -49,7 +51,11 @@ export const useAuthStore = create<AuthState>()(
       login: (user, accessToken, refreshToken) =>
         set({ user, accessToken, refreshToken, isAuthenticated: true }),
       logout: () => {
-        window.localStorage.removeItem('routine-draft-v1');
+        const uid = get().user?.id ?? null;
+        void clearMaterialUploadSessionForUser(uid);
+        // Routine drafts are per-user (`routine-draft-v1:<userId>`) and intentionally kept
+        // across logout so tutors/students do not lose in-progress schedule edits.
+        useTutorSessionStore.getState().clearAll();
         set({ user: null, accessToken: null, refreshToken: null, isAuthenticated: false });
       },
     }),

@@ -63,4 +63,5 @@ python-engineio==4.9.1
 # Testing
 pytest==8.3.5
 pytest-asyncio==0.24.0
+pytest-mock==3.14.0
 httpx==0.28.1

@@ -19,7 +19,7 @@ from app.core.timezones import user_timezone
 from app.db.session import AsyncSessionLocal
 from app.models.community import Community, CommunityMember
 from app.models.course import AttendanceRecord, Enrollment, ScheduleSlot, Course
-from app.models.enums import CommunityRole, DayOfWeek, NotificationType
+from app.models.enums import CommunityRole, DayOfWeek, NotificationType, Role
 from app.models.misc import Notification
 from app.models.user import User
 from app.services import notification_service
@@ -77,6 +77,9 @@ async def _create_student_reminders(
     Informational morning overview — shows what classes the student has today.
     No attendancePrompt here; response form lives on the post-class notification only.
     """
+    if user.role != Role.STUDENT:
+        return
+
     slots = (
         await db.execute(
             select(ScheduleSlot, Course)
@@ -124,6 +127,9 @@ async def _create_tutor_reminders(
     now: datetime,
     local_today: date,
 ) -> None:
+    if user.role == Role.STUDENT:
+        return
+
     tutor_slots = (
         await db.execute(
             select(ScheduleSlot, Course, Community)
@@ -303,6 +309,8 @@ async def schedule_11pm_followups(ctx: dict) -> None:
 
             for user in users:
                 if not user.notif_newest_update:
+                    continue
+                if user.role != Role.STUDENT:
                     continue
 
                 tz = user_timezone(user)

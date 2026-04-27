@@ -115,6 +115,21 @@ if TYPE_CHECKING:
 CurrentUserDep = Annotated["_User", Depends(get_current_user)]
 
 
+async def get_current_student_id(user_id: CurrentUserIdDep, db: DBDep) -> str:
+    """AI Tutor and other student-only surfaces."""
+    from app.models.user import User
+
+    user = await db.get(User, user_id)
+    if not user:
+        raise UnauthorizedError("User account not found or has been deleted")
+    if user.role != Role.STUDENT:
+        raise ForbiddenError("This feature is available to students only")
+    return user.id
+
+
+StudentUserIdDep = Annotated[str, Depends(get_current_student_id)]
+
+
 def require_role(*roles: Role):
     """Returns a FastAPI dependency that enforces RBAC."""
     async def _check(

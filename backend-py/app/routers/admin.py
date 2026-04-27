@@ -7,8 +7,10 @@ from app.core.response import created, success
 from app.models.enums import Role
 from app.schemas.admin import (
     AdminCreateCommunityRequest,
+    AdminCreateThreadRequest,
     AdminCreateUserRequest,
     AdminUpdateCommunityRequest,
+    AdminUpdateThreadRequest,
     AdminUpdateUserRequest,
 )
 from app.services import admin_service
@@ -96,7 +98,36 @@ async def delete_community(community_id: str, db: DBDep, _admin_id: str = requir
     return success(data)
 
 
-@router.get("/stats")
-async def get_platform_stats(db: DBDep, _admin_id: str = require_role(Role.ADMIN)):
-    data = await admin_service.get_platform_stats(db)
+@router.get("/threads")
+async def list_threads(
+    db: DBDep,
+    _admin_id: str = require_role(Role.ADMIN),
+    page: int = 1,
+    limit: int = 20,
+    search: str | None = None,
+):
+    items, total = await admin_service.list_threads(db, page, limit, search)
+    return success(items, meta={"page": page, "limit": limit, "total": total})
+
+
+@router.post("/threads")
+async def create_thread(body: AdminCreateThreadRequest, db: DBDep, _admin_id: str = require_role(Role.ADMIN)):
+    data = await admin_service.create_thread(db, body.model_dump())
+    return created(data)
+
+
+@router.patch("/threads/{thread_id}")
+async def update_thread(
+    thread_id: str,
+    body: AdminUpdateThreadRequest,
+    db: DBDep,
+    _admin_id: str = require_role(Role.ADMIN),
+):
+    data = await admin_service.update_thread(db, thread_id, body.model_dump(exclude_unset=True))
+    return success(data)
+
+
+@router.delete("/threads/{thread_id}")
+async def delete_thread(thread_id: str, db: DBDep, _admin_id: str = require_role(Role.ADMIN)):
+    data = await admin_service.delete_thread(db, thread_id)
     return success(data)

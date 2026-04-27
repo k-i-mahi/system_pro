@@ -23,6 +23,24 @@ vi.mock('../../src/lib/api', () => ({
   },
 }));
 
+vi.mock('../../src/stores/auth.store', () => {
+  const state = {
+    logout: vi.fn(),
+    user: { id: 'u1', role: 'STUDENT', name: 'Test Student', email: 'student@test.edu' },
+  };
+  return {
+    useAuthStore: Object.assign(
+      vi.fn((selector?: (s: typeof state) => unknown) => {
+        if (typeof selector === 'function') return selector(state);
+        return state;
+      }),
+      {
+        getState: vi.fn(() => state),
+      }
+    ),
+  };
+});
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -49,8 +67,8 @@ describe('SettingsPage', () => {
   it('renders all three tabs', () => {
     renderPage();
     expect(screen.getByText('General')).toBeInTheDocument();
-    expect(screen.getByText('Password')).toBeInTheDocument();
     expect(screen.getByText('Notifications')).toBeInTheDocument();
+    expect(screen.getByText('Integrations')).toBeInTheDocument();
   });
 
   it('shows general settings by default', async () => {
@@ -64,14 +82,13 @@ describe('SettingsPage', () => {
     expect(screen.getByText('Date Format')).toBeInTheDocument();
   });
 
-  it('switches to password tab', async () => {
+  it('switches to integrations tab', async () => {
     renderPage();
     const user = userEvent.setup();
-    await user.click(screen.getByText('Password'));
-    expect(screen.getByText('Change Password')).toBeInTheDocument();
-    expect(screen.getByText('Current Password')).toBeInTheDocument();
-    expect(screen.getByText('New Password')).toBeInTheDocument();
-    expect(screen.getByText('Confirm New Password')).toBeInTheDocument();
+    await user.click(screen.getByText('Integrations'));
+    await waitFor(() => {
+      expect(screen.getByText('Google Classroom')).toBeInTheDocument();
+    });
   });
 
   it('switches to notifications tab', async () => {
@@ -79,19 +96,12 @@ describe('SettingsPage', () => {
     const user = userEvent.setup();
     await user.click(screen.getByText('Notifications'));
     await waitFor(() => {
-      expect(screen.getByText('Notification Preferences')).toBeInTheDocument();
+      expect(screen.getByText('Notification and Reminder Settings')).toBeInTheDocument();
     });
-    expect(screen.getByText('Chat notifications')).toBeInTheDocument();
-    expect(screen.getByText('Newest updates')).toBeInTheDocument();
-    expect(screen.getByText('Mentor of the month')).toBeInTheDocument();
-    expect(screen.getByText('Course of the month')).toBeInTheDocument();
-  });
-
-  it('has Update Password button in password tab', async () => {
-    renderPage();
-    const user = userEvent.setup();
-    await user.click(screen.getByText('Password'));
-    expect(screen.getByText('Update Password')).toBeInTheDocument();
+    expect(screen.getByText('Community chat and replies')).toBeInTheDocument();
+    expect(screen.getByText('Class reminders and follow-ups')).toBeInTheDocument();
+    expect(screen.getByText('System announcements')).toBeInTheDocument();
+    expect(screen.getByText('Mentor highlights')).toBeInTheDocument();
   });
 
   it('renders language options', async () => {

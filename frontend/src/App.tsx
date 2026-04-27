@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import AppLayout from '@/components/layout/AppLayout';
 import RoleRoute from '@/components/auth/RoleRoute';
+import { useAuthStore } from '@/stores/auth.store';
 import LoginPage from '@/pages/auth/LoginPage';
 import RegisterPage from '@/pages/auth/RegisterPage';
 import ForgotPasswordPage from '@/pages/auth/ForgotPasswordPage';
@@ -17,8 +18,16 @@ import InstructorEvalPage from '@/pages/analytics/InstructorEvalPage';
 import LandingPage from '@/pages/landing/LandingPage';
 import SettingsPage from '@/pages/settings/SettingsPage';
 import ProfilePage from '@/pages/profile/ProfilePage';
-import AdminPanelPage from '@/pages/admin/AdminPanelPage';
+import AdminUsersPage from '@/pages/admin/AdminUsersPage';
+import AdminThreadsPage from '@/pages/admin/AdminThreadsPage';
+import AdminClassroomsPage from '@/pages/admin/AdminClassroomsPage';
 import TutorDashboardPage from '@/pages/tutor/TutorDashboardPage';
+
+function CoursesListGate() {
+  const role = useAuthStore((s) => s.user?.role);
+  if (role === 'TUTOR') return <Navigate to="/community" replace />;
+  return <CoursesPage />;
+}
 
 export default function App() {
   return (
@@ -30,17 +39,34 @@ export default function App() {
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route element={<AppLayout />}>
         <Route path="/routine" element={<RoutinePage />} />
-        <Route path="/courses" element={<CoursesPage />} />
+        <Route path="/courses" element={<CoursesListGate />} />
         <Route path="/courses/:courseId" element={<CourseDetailPage />} />
-        <Route path="/ai-tutor" element={<AITutorPage />} />
+        <Route
+          path="/ai-tutor"
+          element={
+            <RoleRoute allowedRoles={['STUDENT']}>
+              <AITutorPage />
+            </RoleRoute>
+          }
+        />
         <Route path="/community" element={<CommunityPage />} />
+        <Route path="/community/threads/:threadId" element={<CommunityPage />} />
+        {/* Without :threadId, :id would otherwise capture id="threads" on ClassroomDetailPage. */}
+        <Route path="/community/threads" element={<Navigate to="/community" replace />} />
         <Route path="/community/:id" element={<ClassroomDetailPage />} />
         <Route path="/notifications" element={<NotificationsPage />} />
-        <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route
+          path="/analytics"
+          element={
+            <RoleRoute allowedRoles={['STUDENT', 'ADMIN']}>
+              <AnalyticsPage />
+            </RoleRoute>
+          }
+        />
         <Route
           path="/analytics/evaluation"
           element={
-            <RoleRoute allowedRoles={['TUTOR', 'ADMIN']}>
+            <RoleRoute allowedRoles={['ADMIN']} redirectTo="/routine">
               <InstructorEvalPage />
             </RoleRoute>
           }
@@ -50,16 +76,36 @@ export default function App() {
         <Route
           path="/dashboard"
           element={
-            <RoleRoute allowedRoles={['TUTOR']} redirectTo="/courses">
+            <RoleRoute allowedRoles={['TUTOR']} redirectTo="/routine">
               <TutorDashboardPage />
             </RoleRoute>
           }
         />
         <Route
           path="/admin"
+          element={<RoleRoute allowedRoles={['ADMIN']}><Navigate to="/admin/users" replace /></RoleRoute>}
+        />
+        <Route
+          path="/admin/users"
           element={
             <RoleRoute allowedRoles={['ADMIN']}>
-              <AdminPanelPage />
+              <AdminUsersPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="/admin/threads"
+          element={
+            <RoleRoute allowedRoles={['ADMIN']}>
+              <AdminThreadsPage />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="/admin/classrooms"
+          element={
+            <RoleRoute allowedRoles={['ADMIN']}>
+              <AdminClassroomsPage />
             </RoleRoute>
           }
         />

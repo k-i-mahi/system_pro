@@ -32,14 +32,14 @@ async def client():
 
 @pytest.mark.asyncio
 async def test_get_settings_requires_auth(client: AsyncClient) -> None:
-    r = await client.get(BASE + "/")
+    r = await client.get(BASE)
     assert r.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_get_settings(client: AsyncClient) -> None:
     token = await _token(client)
-    r = await client.get(BASE + "/", headers={"Authorization": f"Bearer {token}"})
+    r = await client.get(BASE, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     data = r.json()["data"]
     assert "language" in data

@@ -47,7 +47,7 @@ async def client():
 
 @pytest.mark.asyncio
 async def test_list_communities_requires_auth(client: AsyncClient) -> None:
-    r = await client.get(f"{BASE}/")
+    r = await client.get(BASE)
     assert r.status_code == 401
 
 
@@ -55,7 +55,7 @@ async def test_list_communities_requires_auth(client: AsyncClient) -> None:
 async def test_student_cannot_create_community(client: AsyncClient) -> None:
     token = await _student_token(client)
     r = await client.post(
-        f"{BASE}/",
+        BASE,
         json={
             "name": "Rogue Community",
             "courseCode": "CSE9999",

@@ -114,6 +114,39 @@ export function useNotificationSocket() {
       queryClient.setQueryData(['notifications-unread-count'], count);
     });
 
+    socket.on('analytics:course-updated', (payload: { courseId?: string }) => {
+      const cid = typeof payload?.courseId === 'string' ? payload.courseId : undefined;
+      queryClient.invalidateQueries({ queryKey: ['analytics-overview'] });
+      if (cid) {
+        queryClient.invalidateQueries({ queryKey: ['analytics-course', cid] });
+      } else {
+        queryClient.invalidateQueries({ queryKey: ['analytics-course'] });
+      }
+    });
+
+    socket.on('routine:updated', (payload: { courseId?: string }) => {
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      queryClient.invalidateQueries({ queryKey: ['my-courses'] });
+      const cid = typeof payload?.courseId === 'string' ? payload.courseId : undefined;
+      if (cid) {
+        queryClient.invalidateQueries({ queryKey: ['course', cid] });
+      }
+    });
+
+    socket.on('community:updated', (payload: { communityId?: string; courseId?: string }) => {
+      queryClient.invalidateQueries({ queryKey: ['communities'] });
+      const commId = typeof payload?.communityId === 'string' ? payload.communityId : undefined;
+      if (commId) {
+        queryClient.invalidateQueries({ queryKey: ['community', commId] });
+      }
+      const courseId = typeof payload?.courseId === 'string' ? payload.courseId : undefined;
+      if (courseId) {
+        queryClient.invalidateQueries({ queryKey: ['course', courseId] });
+        queryClient.invalidateQueries({ queryKey: ['my-courses'] });
+        queryClient.invalidateQueries({ queryKey: ['analytics-course', courseId] });
+      }
+    });
+
     return () => {
       socket.disconnect();
     };
